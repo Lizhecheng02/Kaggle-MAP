@@ -278,7 +278,8 @@ def main():
         greater_is_better=True,
         load_best_model_at_end=True,
         report_to="wandb" if USE_WANDB else "none",
-        bf16=True,  # BF16を使用
+        bf16=BF16,  # BF16を使用
+        fp16=FP16,  # FP16は使用しない
         gradient_checkpointing=True,  # メモリ効率化のため有効化
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない

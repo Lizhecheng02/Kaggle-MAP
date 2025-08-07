@@ -48,7 +48,7 @@ def format_input(row):
         # "You are a math teacher grading students that took a diagnostic multiple choice math question. "
         # "You must classify the explanation given by the student as to why they chose their answer.<|im_end|>"
         "<|im_start|>user<|im_sep|>\n"
-        f"[Mathematical Misconception Analysis Task]\n\n"
+        # f"[Mathematical Misconception Analysis Task]\n\n"
         f"Question: {row['QuestionText']}\n"
         f"Answer: {row['MC_Answer']}\n"
         f"Correct?: {status}\n"

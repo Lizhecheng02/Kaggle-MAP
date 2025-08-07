@@ -68,3 +68,7 @@ MAX_GRAD_NORM = 1.0  # Gradient clipping value
 # "eager": 標準のPyTorch実装
 # "flash_attention_2": Flash Attention 2実装（高速・省メモリ）
 ATTENTION_IMPLEMENTATION = "eager"  # Options: "eager", "flash_attention_2"
+
+
+FP16 = False  # Use FP16 training
+BF16 = True  # Use BF16 training for Phi-4
