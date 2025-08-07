@@ -1,0 +1,22 @@
+{
+    "best_params": {
+        "tfidf_ngram_max": 2,
+        "tfidf_max_df": 0.8326748380537715,
+        "tfidf_min_df": 5,
+        "tfidf_max_features": 3500,
+        "max_depth": 7,
+        "learning_rate": 0.12323915991963974,
+        "subsample": 0.8224976620815416,
+        "colsample_bytree": 0.6466957705318639,
+        "min_child_weight": 2,
+        "gamma": 0.2922568156373709,
+        "alpha": 0.15557693524330424,
+        "lambda": 1.9788139112336167,
+        "max_bin": 64,
+        "max_delta_step": 3,
+        "max_leaves": 65
+    },
+    "best_map3": 0.9174569435360762,
+    "n_trials": 50,
+    "datetime": "2025-07-13 08:22:04"
+}
