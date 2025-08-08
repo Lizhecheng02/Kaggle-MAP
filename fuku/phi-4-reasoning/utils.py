@@ -28,37 +28,39 @@ def format_input(row):
         status = "No"
 
     # 元のプロンプト（コメントアウト）
-    # prompt = (
-    #     "<|user|>\n"
-    #     f"[Mathematical Misconception Analysis Task]\n\n"
-    #     f"Question: {row['QuestionText']}\n"
-    #     f"Answer: {row['MC_Answer']}\n"
-    #     f"Correct?: {status}\n"
-    #     f"Explanation: {row['StudentExplanation']}\n"
-    #     "<|end|>\n"
-    #     "<|assistant|>\n"
-    #     "<think>\n"
-    #     "Let me analyze this mathematical misconception...\n"
-    #     "</think>\n\n"
-    # )
-
-    # 改善されたプロンプト
     prompt = (
-        "<|im_start|>system<|im_sep|>\n"
-        "You are a math teacher grading students that took a diagnostic multiple choice math question. \n"
-        "You must classify the explanation given by the student as to why they chose their answer.<|im_end|>\n"
-        "<|im_start|>user<|im_sep|>\n"
-        # f"[Mathematical Misconception Analysis Task]\n\n"
+        "<|user|>\n"
+        f"[Mathematical Misconception Analysis Task]\n\n"
         f"Question: {row['QuestionText']}\n"
         f"Answer: {row['MC_Answer']}\n"
         f"Correct?: {status}\n"
-        f"Explanation: {row['StudentExplanation']}\n\n"
+        f"Explanation: {row['StudentExplanation']}\n"
         "<|end|>\n"
         "<|assistant|>\n"
         "<think>\n"
         "Let me analyze this mathematical misconception...\n"
         "</think>\n\n"
     )
+
+    # Phi-4-reasoning用のプロンプト
+    # prompt = (
+    #     # System message
+    #     "<|im_start|>system<|im_sep|>\n"
+    #     "You are a math teacher grading students that took a diagnostic multiple choice math question. \n"
+    #     "You must classify the explanation given by the student as to why they chose their answer.\n"
+    #     "<|im_end|>\n"
+    #     # User message
+    #     "<|im_start|>user<|im_sep|>\n"
+    #     f"Question: {row['QuestionText']}\n"
+    #     f"Answer: {row['MC_Answer']}\n"
+    #     f"Correct?: {status}\n"
+    #     f"Explanation: {row['StudentExplanation']}\n"
+    #     "<|im_end|>\n"
+    #     # Assistant message - leave open for generation
+    #     "<|im_start|>assistant<|im_sep|>"
+    #     "<think>\n"
+    #     "Let me analyze this mathematical misconception...\n"
+    # )
     return prompt
 
 

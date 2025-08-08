@@ -1,5 +1,5 @@
 """
-Qwen-3-0.6B モデルトレーニングスクリプト
+Phi-4 モデルトレーニングスクリプト
 """
 
 import os
@@ -23,12 +23,12 @@ from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 from transformers import AutoModel
 import wandb
 from transformers import EarlyStoppingCallback, TrainerCallback
+import gc
 
 # カスタムモジュールのインポート
 from config import *
 from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3
 from data_collator import DataCollatorWithPadding
-from augmentation import MathTextAugmenter, augment_dataset
 
 
 class SaveBestMap3Callback(TrainerCallback):
@@ -57,17 +57,17 @@ class SaveBestMap3Callback(TrainerCallback):
         return control
 
 
-class Qwen2ForSequenceClassification(nn.Module):
-    """Qwen2モデルを分類タスク用にカスタマイズ"""
+class Phi4ForSequenceClassification(nn.Module):
+    """Phi-4モデルを分類タスク用にカスタマイズ"""
     def __init__(self, model_name, num_labels):
         super().__init__()
         from transformers import AutoModel
-        self.qwen = AutoModel.from_pretrained(model_name, trust_remote_code=True)
+        self.phi = AutoModel.from_pretrained(model_name, trust_remote_code=True)
         self.dropout = nn.Dropout(0.1)
-        self.classifier = nn.Linear(self.qwen.config.hidden_size, num_labels)
+        self.classifier = nn.Linear(self.phi.config.hidden_size, num_labels)
 
     def forward(self, input_ids, attention_mask=None, labels=None):
-        outputs = self.qwen(input_ids=input_ids, attention_mask=attention_mask)
+        outputs = self.phi(input_ids=input_ids, attention_mask=attention_mask)
         # 最後のトークンの隠れ状態を使用
         pooled_output = outputs.last_hidden_state[:, -1, :]
         pooled_output = self.dropout(pooled_output)
@@ -83,6 +83,15 @@ class Qwen2ForSequenceClassification(nn.Module):
 
 def main():
     """メイントレーニング関数"""
+
+    # config.pyの内容を出力
+    print("=" * 80)
+    print("Configuration Settings (config.py):")
+    print("=" * 80)
+    with open('config.py', 'r', encoding='utf-8') as f:
+        print(f.read())
+    print("=" * 80)
+    print()
 
     # WandBの初期化
     if USE_WANDB:
@@ -103,6 +112,8 @@ def main():
                 "lora_target_modules": LORA_TARGET_MODULES,
                 "lora_dropout": LORA_DROPOUT,
                 "lora_bias": LORA_BIAS,
+                "use_dora": USE_DORA,
+                "attention_implementation": ATTENTION_IMPLEMENTATION,
             }
         )
 
@@ -110,6 +121,10 @@ def main():
     if CUDA_VISIBLE_DEVICES is not None:
         os.environ['CUDA_VISIBLE_DEVICES'] = CUDA_VISIBLE_DEVICES
         print(f"Using CUDA device(s): {CUDA_VISIBLE_DEVICES}")
+
+    # メモリキャッシュをクリア
+    torch.cuda.empty_cache()
+    gc.collect()
 
     # 出力ディレクトリの作成
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -141,12 +156,11 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
 
     # パディングトークンの設定
-    # Qwen3モデルの場合、特別なトークンIDを使用
+    # Phi-4-reasoning-plusモデルの場合の設定
     if tokenizer.pad_token is None:
-        # 語彙内の安全なトークンIDを使用
-        # Qwenモデルでは、0番のトークンがUNKNOWNトークンとして使われることが多い
-        tokenizer.pad_token_id = 0
-        tokenizer.pad_token = tokenizer.decode([0])
+        # Phi-4-reasoning-plusでは特別なパディングトークンを使用
+        tokenizer.pad_token = "<|finetune_right_pad_id|>"
+        tokenizer.pad_token_id = 100349  # Phi-4-reasoning-plusのPADトークンID
 
     # --- トークン長の分析 ---
     print("Analyzing token lengths...")
@@ -166,33 +180,6 @@ def main():
     # --- データの分割 ---
     print("Splitting data into train and validation sets...")
     train_df, val_df = train_test_split(train, test_size=VALIDATION_SPLIT, random_state=RANDOM_SEED)
-    
-    # --- Data Augmentationの適用 ---
-    if USE_DATA_AUGMENTATION:
-        print("Applying data augmentation to training set...")
-        print(f"Original training samples: {len(train_df)}")
-        
-        # Augmenterの初期化
-        augmenter = MathTextAugmenter(augment_prob=AUGMENTATION_PROB, seed=RANDOM_SEED)
-        
-        # StudentExplanationカラムがない場合は追加
-        if 'StudentExplanation' not in train_df.columns:
-            # textから説明文を抽出（最後の部分が説明文と仮定）
-            train_df['StudentExplanation'] = train_df['text'].apply(
-                lambda x: x.split('\n')[-1] if '\n' in x else x
-            )
-        
-        # Augmentationを適用
-        train_df = augment_dataset(train_df, augmenter, augment_ratio=AUGMENTATION_RATIO)
-        print(f"Training samples after augmentation: {len(train_df)}")
-        
-        # Augmentationの統計を表示
-        if 'augmentation_type' in train_df.columns:
-            aug_stats = train_df['augmentation_type'].value_counts()
-            print("\nAugmentation statistics:")
-            for aug_type, count in aug_stats.items():
-                print(f"  - {aug_type}: {count}")
-    
     COLS = ['text','label']
     train_ds = Dataset.from_pandas(train_df[COLS])
     val_ds = Dataset.from_pandas(val_df[COLS])
@@ -214,22 +201,28 @@ def main():
             MODEL_NAME,
             num_labels=n_classes,
             trust_remote_code=True,
-            device_map=None  # デバイスマッピングを無効化
+            device_map=None,  # デバイスマッピングを無効化
+            torch_dtype=torch.bfloat16,  # BF16で読み込み
+            low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
+            attn_implementation=ATTENTION_IMPLEMENTATION  # config.pyで設定したアテンション実装を使用
         )
         # パディングトークンIDを設定
         model.config.pad_token_id = tokenizer.pad_token_id
     except:
         # 失敗した場合はカスタムクラスを使用
-        print("Using custom classification head for Qwen2...")
+        print("Using custom classification head for Phi-4...")
         # ベースモデルを読み込む
         base_model = AutoModel.from_pretrained(
             MODEL_NAME,
             trust_remote_code=True,
-            device_map=None
+            device_map=None,
+            torch_dtype=torch.bfloat16,  # BF16で読み込み
+            low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
+            attn_implementation=ATTENTION_IMPLEMENTATION  # config.pyで設定したアテンション実装を使用
         )
         # カスタム分類ヘッドを作成
-        model = Qwen2ForSequenceClassification(MODEL_NAME, n_classes)
-        model.qwen = base_model
+        model = Phi4ForSequenceClassification(MODEL_NAME, n_classes)
+        model.phi = base_model
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
@@ -240,6 +233,7 @@ def main():
         lora_dropout=LORA_DROPOUT,
         bias=LORA_BIAS,
         task_type=TaskType.SEQ_CLS,
+        use_dora=USE_DORA,  # DoRAの使用設定
     )
 
     # PEFTモデルの作成
@@ -247,9 +241,23 @@ def main():
     print("Number of trainable parameters:")
     model.print_trainable_parameters()
 
+    # Gradient checkpointingを有効化
+    if hasattr(model, 'enable_input_require_grads'):
+        model.enable_input_require_grads()
+
+    # モデルのgradient checkpointingを有効化
+    if hasattr(model.base_model, 'gradient_checkpointing_enable'):
+        model.base_model.gradient_checkpointing_enable()
+    elif hasattr(model, 'gradient_checkpointing_enable'):
+        model.gradient_checkpointing_enable()
+
     # シングルGPUに設定
     if torch.cuda.is_available():
         model = model.cuda()
+
+    # 追加のメモリ最適化
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
     # --- トレーニング引数の設定 ---
     training_args = TrainingArguments(
@@ -270,13 +278,16 @@ def main():
         greater_is_better=True,
         load_best_model_at_end=True,
         report_to="wandb" if USE_WANDB else "none",
-        bf16=True,  # RTX 5090の互換性問題のため一時的にFalse
-        gradient_checkpointing=False,  # インデックスエラーのため一時的に無効化
+        bf16=BF16,  # BF16を使用
+        fp16=FP16,  # FP16は使用しない
+        gradient_checkpointing=True,  # メモリ効率化のため有効化
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない
         lr_scheduler_type="cosine",  # コサインスケジューラーを使用
         warmup_ratio=0.0,  # ウォームアップを無効化
         save_total_limit=2,
+        max_grad_norm=MAX_GRAD_NORM,  # Gradient clipping
+        optim="adamw_bnb_8bit" if USE_8BIT_ADAM else "adamw_torch",  # 8-bit Adam optimizer
     )
 
     # --- トレーナーのセットアップとトレーニング ---
