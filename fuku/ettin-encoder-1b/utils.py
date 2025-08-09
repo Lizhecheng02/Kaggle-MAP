@@ -29,7 +29,7 @@ def format_input(row):
         f"Question: {row['QuestionText']}\n"
         f"Answer: {row['MC_Answer']}\n"
         f"Correct? {x}\n"
-        f"Student Explanation: {row['StudentExplanation']}"
+        f"Explanation: {row['StudentExplanation']}"
     )
 
 
@@ -37,7 +37,7 @@ def tokenize_dataset(dataset, tokenizer, max_len):
     """データセットをトークナイズ"""
     def tokenize(batch):
         return tokenizer(batch['text'], padding='max_length', truncation=True, max_length=max_len)
-    
+
     dataset = dataset.map(tokenize, batched=True)
     columns = ['input_ids', 'attention_mask', 'label'] if 'label' in dataset.column_names else ['input_ids', 'attention_mask']
     dataset.set_format(type='torch', columns=columns)
@@ -48,7 +48,7 @@ def compute_map3(eval_pred):
     """Top-3 予測に基づくMAP@3を計算"""
     logits, labels = eval_pred
     probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
-    
+
     top3 = np.argsort(-probs, axis=1)[:, :3]  # Top 3 predictions
     match = (top3 == labels[:, None])
 
@@ -67,7 +67,7 @@ def compute_map3(eval_pred):
 def create_submission(predictions, test_data, label_encoder):
     """予測結果から提出用ファイルを作成"""
     probs = torch.nn.functional.softmax(torch.tensor(predictions.predictions), dim=1).numpy()
-    
+
     # Get top 3 predicted class indices
     top3 = np.argsort(-probs, axis=1)[:, :3]   # shape: [num_samples, 3]
 
