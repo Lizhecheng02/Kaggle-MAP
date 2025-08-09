@@ -42,8 +42,8 @@ SUBMISSION_OUTPUT_PATH = 'submission.csv'
 
 # WandB settings
 USE_WANDB = True  # Set to False to disable WandB
-WANDB_PROJECT = "qwen2.5-14b-math-misconceptions"
-WANDB_RUN_NAME = f"qwen2.5-14b-ver{VER}"
+WANDB_PROJECT = "qwen2.5-0.5b-math-misconceptions"
+WANDB_RUN_NAME = f"qwen2.5-0.5b-ver{VER}"
 WANDB_ENTITY = None  # Set your WandB entity (username or team name) if needed
 
 # Early stopping settings
