@@ -27,42 +27,14 @@ def format_input(row):
     else:
         status = "No"
 
-    # 元のプロンプト（コメントアウト）
+    # 一般的なテキスト分類向けのプレーンテキストプロンプト
     prompt = (
-        "<|im_start|>system<|im_sep|>\n"
-        "You are a math teacher grading students that took a diagnostic multiple choice math question. \n"
-        "You must classify the explanation given by the student as to why they chose their answer.<|im_end|>\n"
-        "<|im_start|>user<|im_sep|>\n"
-        "<|user|>\n"
-        f"[Mathematical Misconception Analysis Task]\n\n"
+        "Task: Classify the student's misconception category based on the question, their chosen answer, correctness, and the explanation.\n\n"
         f"Question: {row['QuestionText']}\n"
-        f"Answer: {row['MC_Answer']}\n"
+        f"Chosen Answer: {row['MC_Answer']}\n"
         f"Correct?: {status}\n"
         f"Explanation: {row['StudentExplanation']}\n"
-        "<|end|>\n"
-        "<|assistant|>\n"
-        "<think>\n"
-        "Let me analyze this mathematical misconception...\n"
-        "</think>\n\n"
     )
-
-    # 改善されたプロンプト
-    # prompt = (
-    #     "<|im_start|>system<|im_sep|>\n"
-    #     "You are a math teacher grading students that took a diagnostic multiple choice math question. \n"
-    #     "You must classify the explanation given by the student as to why they chose their answer.<|im_end|>\n"
-    #     "<|im_start|>user<|im_sep|>\n"
-    #     # f"[Mathematical Misconception Analysis Task]\n\n"
-    #     f"Question: {row['QuestionText']}\n"
-    #     f"Answer: {row['MC_Answer']}\n"
-    #     f"Correct?: {status}\n"
-    #     f"Explanation: {row['StudentExplanation']}\n\n"
-    #     "<|end|>\n"
-    #     "<|assistant|>\n"
-    #     "<think>\n"
-    #     "Let me analyze this mathematical misconception...\n"
-    #     "</think>\n\n"
-    # )
     return prompt
 
 
