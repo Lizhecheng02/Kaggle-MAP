@@ -41,16 +41,33 @@ def format_input(row):
     #     "Let me analyze this mathematical misconception...\n"
     #     "</think>\n\n"
     # )
+    # prompt = (
+    #     "<|im_start|>system<|im_sep|>"
+    #     "You are a math teacher grading students that took a diagnostic multiple choice math question. "
+    #     "You must classify the explanation given by the student as to why they chose their answer.<|im_end|>"
+    #     "<|im_start|>user<|im_sep|>\n"
+    #     f"Question: {row['QuestionText']}\n"
+    #     f"Answer: {row['MC_Answer']}\n"
+    #     f"Correct?: {status}\n"
+    #     f"Explanation: {row['StudentExplanation']}<|im_end|>"
+    #     "<|im_start|>assistant<|im_sep|>"
+    # )
+
     prompt = (
         "<|im_start|>system<|im_sep|>"
         "You are a math teacher grading students that took a diagnostic multiple choice math question. "
         "You must classify the explanation given by the student as to why they chose their answer.<|im_end|>"
-        "<|im_start|>user<|im_sep|>\n"
+        "<|user|>\n"
+        f"[Mathematical Misconception Analysis Task]\n\n"
         f"Question: {row['QuestionText']}\n"
         f"Answer: {row['MC_Answer']}\n"
         f"Correct?: {status}\n"
-        f"Explanation: {row['StudentExplanation']}<|im_end|>"
-        "<|im_start|>assistant<|im_sep|>"
+        f"Explanation: {row['StudentExplanation']}\n"
+        "<|end|>\n"
+        # "<|assistant|>\n"
+        # "<think>\n"
+        # "Let me analyze this mathematical misconception...\n"
+        # "</think>\n\n"
     )
     return prompt
 

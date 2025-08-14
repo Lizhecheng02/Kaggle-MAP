@@ -57,21 +57,12 @@ def main():
         print(f"Loading fine-tuned LoRA model from: {BEST_MODEL_PATH}")
         print(f"Loading base model from: {MODEL_NAME}")
 
-        # ベースモデルを読み込む（8bit量子化で読み込み）
-        from transformers import BitsAndBytesConfig
-        
-        quantization_config = BitsAndBytesConfig(
-            load_in_8bit=True,
-            bnb_8bit_compute_dtype=torch.float16,
-            bnb_8bit_use_double_quant=True,
-            bnb_8bit_quant_type="nf4"
-        )
-        
+        # ベースモデルを読み込む（通常のfloat16で読み込み）
         model = AutoModelForSequenceClassification.from_pretrained(
             MODEL_NAME,
             num_labels=n_classes,
             trust_remote_code=True,
-            quantization_config=quantization_config,
+            torch_dtype=torch.float16,
             device_map="auto",  # 自動的に複数GPUに分散
             low_cpu_mem_usage=True  # CPUメモリ使用量を削減
         )
@@ -81,7 +72,6 @@ def main():
         
         # 推論モードに設定（メモリ効率化）
         model.eval()
-        # 8bit量子化モデルは既にGPUに配置されているのでto('cuda')は不要
 
         # トークナイザーはベースモデルから読み込む
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
