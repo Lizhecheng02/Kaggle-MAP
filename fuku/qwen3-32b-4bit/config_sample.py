@@ -3,8 +3,8 @@
 """
 
 # Model configuration
-VER = 2
-MODEL_NAME = "/kaggle/input/qwen-3-32b"
+VER = "4bit"
+MODEL_NAME = "/hdd/models/Qwen3-32B"
 MODEL_TYPE = "qwen2"  # Add model type for proper handling
 EPOCHS = 3  # Reduce epochs for initial testing
 MAX_LEN = 300  # Increase max length for better context
@@ -62,3 +62,10 @@ LORA_BIAS = "none"  # biasの扱い: "none", "all", "lora_only"
 USE_GRADIENT_CHECKPOINTING = True  # Enable gradient checkpointing
 USE_8BIT_ADAM = False  # Use 8-bit Adam optimizer for memory efficiency
 MAX_GRAD_NORM = 1.0  # Gradient clipping value
+
+# 4-bit quantization settings
+USE_4BIT_QUANTIZATION = True  # Enable 4-bit quantization
+BNB_4BIT_COMPUTE_DTYPE = "bfloat16"  # Compute dtype for 4-bit base models
+BNB_4BIT_QUANT_TYPE = "nf4"  # Quantization type (fp4 or nf4)
+BNB_4BIT_USE_DOUBLE_QUANT = True  # Use double quantization
+BNB_4BIT_QUANT_STORAGE_DTYPE = "uint8"  # Storage dtype for quantized weights
