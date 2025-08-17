@@ -13,9 +13,9 @@ MAX_LEN = 300  # Increase max length for better context
 OUTPUT_DIR = f"ver_{VER}"
 
 # Training parameters
-TRAIN_BATCH_SIZE = 16  # Batch size 2 for RTX 5090 with 31GB VRAM
-EVAL_BATCH_SIZE = 16  # Eval can use larger batch size
-GRADIENT_ACCUMULATION_STEPS = 2  # Reduced to 32 for faster training
+TRAIN_BATCH_SIZE = 8  # Batch size 2 for RTX 5090 with 31GB VRAM
+EVAL_BATCH_SIZE = 8  # Eval can use larger batch size
+GRADIENT_ACCUMULATION_STEPS = 8  # Reduced to 32 for faster training
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 50
 SAVE_STEPS = 200
