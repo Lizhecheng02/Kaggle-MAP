@@ -27,44 +27,15 @@ def format_input(row):
     else:
         status = "No"
 
-    # Phi-4用のプロンプトフォーマット（特別なthinkタグを含む）
-    # prompt = (
-    #     "<|user|>\n"
-    #     f"[Mathematical Misconception Analysis Task]\n\n"
-    #     f"Question: {row['QuestionText']}\n"
-    #     f"Answer: {row['MC_Answer']}\n"
-    #     f"Correct?: {status}\n"
-    #     f"Explanation: {row['StudentExplanation']}\n"
-    #     "<|end|>\n"
-    #     "<|assistant|>\n"
-    #     "<think>\n"
-    #     "Let me analyze this mathematical misconception...\n"
-    #     "</think>\n\n"
-    # )
-    # prompt = (
-    #     "<|im_start|>system<|im_sep|>"
-    #     "You are a math teacher grading students that took a diagnostic multiple choice math question. "
-    #     "You must classify the explanation given by the student as to why they chose their answer.<|im_end|>"
-    #     "<|im_start|>user<|im_sep|>\n"
-    #     f"Question: {row['QuestionText']}\n"
-    #     f"Answer: {row['MC_Answer']}\n"
-    #     f"Correct?: {status}\n"
-    #     f"Explanation: {row['StudentExplanation']}<|im_end|>"
-    #     "<|im_start|>assistant<|im_sep|>"
-    # )
-
+    # Qwen2.5-Math用の数学タスクに特化したプロンプト
     prompt = (
-        #"<|user|>\n"
+        "<|im_start|>user"
         f"[Mathematical Misconception Analysis Task]\n\n"
         f"Question: {row['QuestionText']}\n"
         f"Answer: {row['MC_Answer']}\n"
         f"Correct?: {status}\n"
-        f"Explanation: {row['StudentExplanation']}\n"
-        #"<|end|>\n"
-        #"<|assistant|>\n"
-        "<think>\n"
-        "Let me analyze this mathematical misconception...\n"
-        "</think>\n\n"
+        f"Explanation: {row['StudentExplanation']}\n\n"
+        "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
     )
     return prompt
 
