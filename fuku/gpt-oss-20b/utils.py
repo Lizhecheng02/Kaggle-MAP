@@ -27,16 +27,13 @@ def format_input(row):
     else:
         status = "No"
 
-    # EXAONE-4.0-32B用の数学タスクに特化したプロンプト
     prompt = (
-        "[INST] "
         f"[Mathematical Misconception Analysis Task]\n\n"
         f"Question: {row['QuestionText']}\n"
         f"Answer: {row['MC_Answer']}\n"
         f"Correct?: {status}\n"
         f"Explanation: {row['StudentExplanation']}\n\n"
-        #"Please analyze this mathematical response and identify the misconception pattern. "
-        "[/INST]"
+        f"Analyze the student's mathematical reasoning and identify the misconception category:\n"
     )
     return prompt
 
