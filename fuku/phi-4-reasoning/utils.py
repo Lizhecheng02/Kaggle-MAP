@@ -42,25 +42,6 @@ def format_input(row):
         "</think>\n\n"
     )
 
-    # Phi-4-reasoning用のプロンプト
-    # prompt = (
-    #     # System message
-    #     "<|im_start|>system<|im_sep|>\n"
-    #     "You are a math teacher grading students that took a diagnostic multiple choice math question. \n"
-    #     "You must classify the explanation given by the student as to why they chose their answer.\n"
-    #     "<|im_end|>\n"
-    #     # User message
-    #     "<|im_start|>user<|im_sep|>\n"
-    #     f"Question: {row['QuestionText']}\n"
-    #     f"Answer: {row['MC_Answer']}\n"
-    #     f"Correct?: {status}\n"
-    #     f"Explanation: {row['StudentExplanation']}\n"
-    #     "<|im_end|>\n"
-    #     # Assistant message - leave open for generation
-    #     "<|im_start|>assistant<|im_sep|>"
-    #     "<think>\n"
-    #     "Let me analyze this mathematical misconception...\n"
-    # )
     return prompt
 
 

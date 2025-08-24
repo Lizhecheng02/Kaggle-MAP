@@ -54,14 +54,14 @@ def format_input(row):
     # )
 
     prompt = (
-        #"<|user|>\n"
+        "<|user|>\n"
         f"[Mathematical Misconception Analysis Task]\n\n"
         f"Question: {row['QuestionText']}\n"
         f"Answer: {row['MC_Answer']}\n"
         f"Correct?: {status}\n"
         f"Explanation: {row['StudentExplanation']}\n"
-        #"<|end|>\n"
-        #"<|assistant|>\n"
+        "<|end|>\n"
+        "<|assistant|>\n"
         "<think>\n"
         "Let me analyze this mathematical misconception...\n"
         "</think>\n\n"

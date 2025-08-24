@@ -40,6 +40,10 @@ class SaveBestMap3Callback(TrainerCallback):
 
     def on_evaluate(self, args, state, control, metrics, model=None, **kwargs):
         current_map3 = metrics.get('eval_map@3', 0.0)
+        current_step = state.global_step
+        total_steps = state.max_steps if state.max_steps else "N/A"
+        
+        print(f"\n[Step {current_step}/{total_steps}] 評価実行 - MAP@3スコア: {current_map3:.4f}")
 
         if current_map3 > self.best_map3:
             self.best_map3 = current_map3
@@ -52,7 +56,9 @@ class SaveBestMap3Callback(TrainerCallback):
             model.save_pretrained(best_map3_path)
             self.tokenizer.save_pretrained(best_map3_path)
 
-            print(f"\n新しいベストMAP@3スコア: {current_map3:.4f} - モデルを {best_map3_path} に保存しました")
+            print(f"🎉 新しいベストMAP@3スコア更新: {current_map3:.4f} (Step {current_step}) - モデルを {best_map3_path} に保存しました")
+        else:
+            print(f"現在のベストMAP@3スコア: {self.best_map3:.4f} (変更なし)")
 
         return control
 
@@ -345,10 +351,25 @@ def main():
     print("Starting training...")
     trainer.train()
 
-    # --- 最終的なMAP@3スコアを表示 ---
-    print("\nEvaluating on validation set...")
-    eval_results = trainer.evaluate()
-    print(f"\nValidation MAP@3: {eval_results.get('eval_map@3', 'N/A'):.4f}")
+    # --- トレーニング終了後の最終評価 ---
+    print("\n" + "="*60)
+    print("トレーニング完了 - 最終評価を実行中...")
+    print("="*60)
+    final_eval_results = trainer.evaluate()
+    final_map3 = final_eval_results.get('eval_map@3', 0.0)
+    print(f"\n🏁 最終評価結果:")
+    print(f"   最終MAP@3スコア: {final_map3:.4f}")
+    print(f"   全体のベストMAP@3スコア: {save_best_callback.best_map3:.4f}")
+    
+    # 最終評価が新しいベストスコアの場合、明示的に保存
+    if final_map3 > save_best_callback.best_map3:
+        print(f"🎉 最終評価で新しいベストスコア達成！ {final_map3:.4f} > {save_best_callback.best_map3:.4f}")
+        save_best_callback.best_map3 = final_map3
+        best_map3_path = os.path.join(OUTPUT_DIR, 'best_map3')
+        os.makedirs(best_map3_path, exist_ok=True)
+        model.save_pretrained(best_map3_path)
+        tokenizer.save_pretrained(best_map3_path)
+        print(f"   最終ベストモデルを {best_map3_path} に保存しました")
 
     # --- モデルの保存 ---
     print("\nSaving model...")
