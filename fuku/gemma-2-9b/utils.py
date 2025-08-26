@@ -28,13 +28,14 @@ def format_input(row):
 
     # Gemma-2用のタグ付きシンプルフォーマット
     prompt = (
-        f"<start_of_turn>user\n"
+        # f"<start_of_turn>user\n"
+        f"[Mathematical Misconception Analysis Task]\n\n"
         f"Question: {row['QuestionText']}\n"
         f"Answer: {row['MC_Answer']}\n"
         f"Correct? {x}\n"
         f"Explanation: {row['StudentExplanation']}"
-        f"<end_of_turn>\n"
-        f"<start_of_turn>model\n"
+        # f"<end_of_turn>\n"
+        # f"<start_of_turn>model\n"
     )
     return prompt
 

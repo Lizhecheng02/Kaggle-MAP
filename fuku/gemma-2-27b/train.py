@@ -30,6 +30,30 @@ from utils import prepare_correct_answers, format_input, tokenize_dataset, compu
 from data_collator import DataCollatorWithPadding
 
 
+# 4-bit quantization (bitsandbytes) setup
+try:
+    from transformers import BitsAndBytesConfig
+    BNB_AVAILABLE = True
+except Exception:
+    BNB_AVAILABLE = False
+
+# Default: enable 4-bit unless config overrides
+try:
+    USE_4BIT
+except NameError:
+    USE_4BIT = True
+
+# Compute dtype selection
+COMPUTE_DTYPE = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+
+# Global BitsAndBytes config (used if available)
+BNB_CONFIG = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=COMPUTE_DTYPE,
+    bnb_4bit_use_double_quant=True,
+) if BNB_AVAILABLE and USE_4BIT else None
+
 class SaveBestMap3Callback(TrainerCallback):
     """eval_map@3が最高値を更新した際にモデルを保存するコールバック"""
     def __init__(self, save_dir, tokenizer):
@@ -63,7 +87,21 @@ class GemmaForSequenceClassification(nn.Module):
     def __init__(self, model_name, num_labels):
         super().__init__()
         from transformers import AutoModelForCausalLM
-        self.gemma = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
+        compute_dtype = COMPUTE_DTYPE
+        if BNB_AVAILABLE and USE_4BIT and BNB_CONFIG is not None:
+            self.gemma = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                device_map=None,
+                quantization_config=BNB_CONFIG,
+            )
+        else:
+            self.gemma = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                device_map=None,
+                torch_dtype=compute_dtype if torch.cuda.is_available() else torch.float32,
+            )
         self.config = self.gemma.config  # configをインスタンス変数として保持
         self.dropout = nn.Dropout(0.1)
         # Gemma2の場合は直接hidden_sizeを取得
@@ -198,28 +236,31 @@ def main():
 
     # --- モデルの初期化 ---
     print("Initializing model...")
+    compute_dtype = COMPUTE_DTYPE
     try:
-        # Gemmaモデルの分類モデルを読み込む
+        # Gemmaモデルの分類モデルを読み込む（4bit量子化対応）
         model = AutoModelForSequenceClassification.from_pretrained(
             MODEL_NAME,
             num_labels=n_classes,
             trust_remote_code=True,
             device_map=None,  # デバイスマッピングを無効化
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
+            torch_dtype=compute_dtype if torch.cuda.is_available() else torch.float32,
+            quantization_config=BNB_CONFIG,
         )
         # パディングトークンIDを設定
         model.config.pad_token_id = tokenizer.pad_token_id
     except:
         # 失敗した場合はカスタムクラスを使用
         print("Using custom classification head for Gemma...")
-        # ベースモデルを読み込む（Gemmaの場合はCausalLMモデルを使用）
+        # ベースモデルを読み込む（4bit量子化対応）
         base_model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
             trust_remote_code=True,
             device_map=None,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
+            torch_dtype=compute_dtype if torch.cuda.is_available() else torch.float32,
+            quantization_config=BNB_CONFIG,
         )
-        # カスタム分類ヘッドを作成
+        # カスタム分類ヘッド
         model = GemmaForSequenceClassification(MODEL_NAME, n_classes)
         model.gemma = base_model
 
@@ -267,7 +308,7 @@ def main():
         gradient_checkpointing=False,  # インデックスエラーのため一時的に無効化
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない
-        lr_scheduler_type="cosine",  # コサインスケジューラーを使用
+        lr_scheduler_type="cosine",  # コサインスケジューラを使用
         warmup_ratio=0.0,  # ウォームアップを無効化
     )
 
@@ -285,7 +326,7 @@ def main():
     print(f"Total training steps: {total_steps}")
     print(f"Evaluation interval: every {EVAL_STEPS} steps (~{EVAL_STEPS/steps_per_epoch:.2f} epochs)")
 
-    # カスタムデータコレーターを使用
+    # カスタムデータコレクレーターを使用
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, max_length=MAX_LEN)
 
     # コールバックの設定

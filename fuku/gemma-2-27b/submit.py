@@ -17,6 +17,21 @@ import os
 # PEFTのインポートをオプショナルにする
 try:
     from peft import PeftModel, PeftConfig
+# 4-bit quantization (bitsandbytes) setup
+try:
+    from transformers import BitsAndBytesConfig
+    BNB_AVAILABLE = True
+except Exception:
+    BNB_AVAILABLE = False
+
+# Default: enable 4-bit unless config overrides
+try:
+    USE_4BIT
+except NameError:
+    USE_4BIT = True
+
+# Compute dtype selection
+COMPUTE_DTYPE = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
     PEFT_AVAILABLE = True
 except ImportError:
     PEFT_AVAILABLE = False
@@ -68,14 +83,30 @@ def main():
             def __init__(self, model_name, num_labels):
                 super().__init__()
                 # device_mapを使って自動的に複数GPUに分散
-                # Gemma2モデルを読み込む
-                self.gemma = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    trust_remote_code=True,
-                    torch_dtype=torch.bfloat16,  # bfloat16で読み込み（Gemma-2推奨）
-                    device_map="auto",  # 自動的に複数GPUに分散
-                    low_cpu_mem_usage=True  # CPUメモリ使用量を削減
-                )
+                # Gemma2モデルを読み込む（4bit量子化対応）
+                compute_dtype = COMPUTE_DTYPE
+                if BNB_AVAILABLE and USE_4BIT:
+                    bnb_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_compute_dtype=compute_dtype,
+                        bnb_4bit_use_double_quant=True,
+                    )
+                    self.gemma = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        trust_remote_code=True,
+                        device_map="auto",  # 自動的に複数GPUに分散
+                        low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
+                        quantization_config=bnb_config,
+                    )
+                else:
+                    self.gemma = AutoModelForCausalLM.from_pretrained(
+                        model_name,
+                        trust_remote_code=True,
+                        torch_dtype=compute_dtype,  # 推論用の計算精度
+                        device_map="auto",  # 自動的に複数GPUに分散
+                        low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
+                    )
                 self.config = self.gemma.config
                 self.dropout = nn.Dropout(0.1)
                 # Gemma2の場合は直接hidden_sizeを使用
@@ -85,8 +116,8 @@ def main():
                 nn.init.normal_(self.classifier.weight, mean=0.0, std=0.02)
                 if self.classifier.bias is not None:
                     nn.init.zeros_(self.classifier.bias)
-                # 分類器もbfloat16に変換
-                self.classifier = self.classifier.bfloat16()
+                # 分類器も適切なdtypeに変換
+                self.classifier = self.classifier.to(dtype=compute_dtype)
 
             def forward(self, input_ids=None, attention_mask=None, inputs_embeds=None, labels=None, **kwargs):
                 if input_ids is None and inputs_embeds is None:
@@ -133,8 +164,8 @@ def main():
                 # デバッグ：dropout後の値を確認
                 print(f"Debug - After dropout has NaN: {torch.isnan(pooled_output).any().item()}")
 
-                # classifierを同じデバイスに移動
-                self.classifier = self.classifier.to(pooled_output.device)
+                # classifierを同じデバイスに移動＋dtype整合
+                self.classifier = self.classifier.to(pooled_output.device, dtype=pooled_output.dtype)
 
                 # デバッグ：classifierの重みを確認
                 print(f"Debug - Classifier weight has NaN: {torch.isnan(self.classifier.weight).any().item()}")
@@ -177,10 +208,10 @@ def main():
 
                 if classifier_weight_key in f.keys():
                     print(f"Loading classifier weights from safetensors")
-                    # classifierの重みを設定（bfloat16で保持）
-                    model.classifier.weight.data = f.get_tensor(classifier_weight_key).to(model.classifier.weight.device).bfloat16()
+                    # classifierの重みを設定（bfloat16/float16で保持）
+                    model.classifier.weight.data = f.get_tensor(classifier_weight_key).to(model.classifier.weight.device).to(dtype=COMPUTE_DTYPE)
                     if classifier_bias_key in f.keys():
-                        model.classifier.bias.data = f.get_tensor(classifier_bias_key).to(model.classifier.bias.device).bfloat16()
+                        model.classifier.bias.data = f.get_tensor(classifier_bias_key).to(model.classifier.bias.device).to(dtype=COMPUTE_DTYPE)
                     print(f"Classifier weights loaded successfully")
 
         # LoRAアダプターを適用 - is_trainable=Falseを追加
@@ -269,7 +300,7 @@ def main():
     ds_test = Dataset.from_pandas(test[['text']])
     ds_test = tokenize_dataset(ds_test, tokenizer, MAX_LEN)
 
-    # パディングのためのデータコラレータの設定
+    # パディングのためのデータコラレーターの設定
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
     print("Running inference...")
