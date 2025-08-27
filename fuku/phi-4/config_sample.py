@@ -4,7 +4,7 @@
 
 # Model configuration
 VER = 2
-MODEL_NAME = "/kaggle/input/phi-4"
+MODEL_NAME = "/kaggle/input/models/phi-4"
 MODEL_TYPE = "phi"  # Phi-4 model type
 EPOCHS = 3  # Reduce epochs for initial testing
 MAX_LEN = 250  # Phi-4 supports longer context
@@ -18,8 +18,8 @@ EVAL_BATCH_SIZE = 4  # Eval batch size
 GRADIENT_ACCUMULATION_STEPS = 16  # Increased for effective batch size
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 50
-SAVE_STEPS = 200
-EVAL_STEPS = 200
+SAVE_STEPS = 229
+EVAL_STEPS = 229
 
 
 # Data paths
@@ -57,7 +57,7 @@ LORA_ALPHA = 128  # LoRAのスケーリングパラメータ - 1:1 ratio with ra
 LORA_TARGET_MODULES = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  # Phi-4 target modules
 LORA_DROPOUT = 0.1  # LoRAのドロップアウト率 - reduced for Phi-4
 LORA_BIAS = "none"  # biasの扱い: "none", "all", "lora_only"
-USE_DORA = True  # DoRA (Weight-Decomposed Low-Rank Adaptation) を使用する場合はTrue
+USE_DORA = False  # DoRA (Weight-Decomposed Low-Rank Adaptation) を使用する場合はTrue
 
 # Memory optimization settings
 USE_GRADIENT_CHECKPOINTING = True  # Enable gradient checkpointing
