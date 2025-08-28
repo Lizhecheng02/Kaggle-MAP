@@ -53,22 +53,16 @@ def format_input(row):
     #     "<|im_start|>assistant<|im_sep|>"
     # )
 
-
-    # 一番いいプロンプト cv0.9481
     prompt = (
         "<|user|>\n"
-        f"[Mathematical Misconception Analysis Task]\n\n"
+        "Analyze the mathematical misconception in this student response.\n\n"
         f"Question: {row['QuestionText']}\n"
         f"Answer: {row['MC_Answer']}\n"
         f"Correct?: {status}\n"
         f"Explanation: {row['StudentExplanation']}\n"
         "<|end|>\n"
         "<|assistant|>\n"
-        "<think>\n"
-        "Let me analyze this mathematical misconception...\n"
-        "</think>\n\n"
     )
-
     return prompt
 
 
