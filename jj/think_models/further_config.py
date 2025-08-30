@@ -1,0 +1,42 @@
+MODEL = "phi4_cot_ver_1"
+MODEL_TYPE = "phi4"
+MAX_SEQ_LENGTH = 1280
+LOAD_BIT = "16"
+
+VER = 2
+OUTPUT_DIR = f"{MODEL_TYPE}_cot_ver_{VER}"
+
+DEBUG = False
+
+DATA_PATH = "../data/think_prompts_gemini-2.5-flash_fold.parquet"
+
+RANDOM_SEED = 42
+VALIDATION_FOLD = 9
+
+LORA_RANK = 16
+LORA_ALPHA = 32
+LORA_TARGET_MODULES = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  # Phi-4 target modules
+LORA_DROPOUT = 0
+LORA_BIAS = "none"
+USE_DORA = False
+USE_RSLORA = False
+LOFTQ_CONFIG = None
+
+USE_GRADIENT_CHECKPOINTING = True
+GRADIENT_CHECKPOINTING = "unsloth"
+
+TRAIN_BATCH_SIZE = 4
+EVAL_BATCH_SIZE = 8
+GRADIENT_ACCUMULATION_STEPS = 16
+EVAL_ACCUMULATION_STEPS = 1
+LEARNING_RATE = 1e-5
+LOGGING_STEPS = 10
+SAVE_STEPS = 200
+EVAL_STEPS = 200
+EVAL_STRATEGY = "steps"
+EPOCHS = 2
+WARMUP_STEPS = 0
+OPTIMIZER = "adamw_8bit"
+WEIGHT_DECAY = 1e-1
+LR_SCHEDULER_TYPE = "cosine"
+LOAD_BEST_MODEL_AT_END = True

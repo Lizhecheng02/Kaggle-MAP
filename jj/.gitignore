@@ -1,8 +1,9 @@
 data/
+outputs/
 unsloth_*
 wandb/
 *_cot_ver_*
-
+*.parquet
 *.ipynb
 
 .vscode/

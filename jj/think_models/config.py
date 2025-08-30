@@ -3,7 +3,7 @@ MODEL_TYPE = "phi4"
 MAX_SEQ_LENGTH = 1280
 LOAD_BIT = "16"
 
-VER = 1
+VER = 3
 OUTPUT_DIR = f"{MODEL_TYPE}_cot_ver_{VER}"
 
 DEBUG = False
@@ -13,10 +13,10 @@ DATA_PATH = "../data/think_prompts_gemini-2.5-flash_fold.parquet"
 RANDOM_SEED = 42
 VALIDATION_FOLD = 9
 
-LORA_RANK = 16
-LORA_ALPHA = 32
+LORA_RANK = 64
+LORA_ALPHA = 128
 LORA_TARGET_MODULES = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  # Phi-4 target modules
-LORA_DROPOUT = 0
+LORA_DROPOUT = 0.1
 LORA_BIAS = "none"
 USE_DORA = False
 USE_RSLORA = False
@@ -27,14 +27,14 @@ GRADIENT_CHECKPOINTING = "unsloth"
 
 TRAIN_BATCH_SIZE = 4
 EVAL_BATCH_SIZE = 8
-GRADIENT_ACCUMULATION_STEPS = 16
+GRADIENT_ACCUMULATION_STEPS = 4
 EVAL_ACCUMULATION_STEPS = 1
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 10
 SAVE_STEPS = 200
 EVAL_STEPS = 200
 EVAL_STRATEGY = "steps"
-EPOCHS = 3
+EPOCHS = 4
 WARMUP_STEPS = 0
 OPTIMIZER = "adamw_8bit"
 WEIGHT_DECAY = 1e-2
