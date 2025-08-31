@@ -1,5 +1,5 @@
 """
-Qwen-3-0.6B モデルトレーニングスクリプト
+DeepSeek-R1-Distill-Qwen-32B モデルトレーニングスクリプト（bitsandbytes 4bit量子化版）
 """
 
 import os
@@ -13,16 +13,18 @@ from transformers import (
     AutoTokenizer,
     TrainingArguments,
     Trainer,
-    AutoConfig
+    AutoConfig,
+    BitsAndBytesConfig
 )
 from datasets import Dataset
 import joblib
 import torch
 import torch.nn as nn
-from peft import LoraConfig, get_peft_model, TaskType, PeftModel
+from peft import LoraConfig, get_peft_model, TaskType, PeftModel, prepare_model_for_kbit_training
 from transformers import AutoModel
 import wandb
 from transformers import EarlyStoppingCallback, TrainerCallback
+import gc
 
 # カスタムモジュールのインポート
 from config import *
@@ -56,17 +58,26 @@ class SaveBestMap3Callback(TrainerCallback):
         return control
 
 
-class Qwen2ForSequenceClassification(nn.Module):
-    """Qwen2モデルを分類タスク用にカスタマイズ"""
-    def __init__(self, model_name, num_labels):
+class DeepSeekR1ForSequenceClassification(nn.Module):
+    """DeepSeek-R1モデルを分類タスク用にカスタマイズ（bitsandbytes 4bit対応）"""
+    def __init__(self, model_name, num_labels, quantization_config=None):
         super().__init__()
         from transformers import AutoModel
-        self.qwen = AutoModel.from_pretrained(model_name, trust_remote_code=True)
+        if quantization_config is not None:
+            self.deepseek = AutoModel.from_pretrained(
+                model_name, 
+                trust_remote_code=True,
+                quantization_config=quantization_config,
+                device_map="auto",  # 自動的にGPUに配置
+                low_cpu_mem_usage=True
+            )
+        else:
+            self.deepseek = AutoModel.from_pretrained(model_name, trust_remote_code=True, device_map="auto")
         self.dropout = nn.Dropout(0.1)
-        self.classifier = nn.Linear(self.qwen.config.hidden_size, num_labels)
+        self.classifier = nn.Linear(self.deepseek.config.hidden_size, num_labels)
 
     def forward(self, input_ids, attention_mask=None, labels=None):
-        outputs = self.qwen(input_ids=input_ids, attention_mask=attention_mask)
+        outputs = self.deepseek(input_ids=input_ids, attention_mask=attention_mask)
         # 最後のトークンの隠れ状態を使用
         pooled_output = outputs.last_hidden_state[:, -1, :]
         pooled_output = self.dropout(pooled_output)
@@ -109,6 +120,10 @@ def main():
     if CUDA_VISIBLE_DEVICES is not None:
         os.environ['CUDA_VISIBLE_DEVICES'] = CUDA_VISIBLE_DEVICES
         print(f"Using CUDA device(s): {CUDA_VISIBLE_DEVICES}")
+
+    # メモリキャッシュをクリア
+    torch.cuda.empty_cache()
+    gc.collect()
 
     # 出力ディレクトリの作成
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -165,8 +180,6 @@ def main():
     # --- データの分割 ---
     print("Splitting data into train and validation sets...")
     train_df, val_df = train_test_split(train, test_size=VALIDATION_SPLIT, random_state=RANDOM_SEED)
-    
-    
     COLS = ['text','label']
     train_ds = Dataset.from_pandas(train_df[COLS])
     val_ds = Dataset.from_pandas(val_df[COLS])
@@ -182,28 +195,38 @@ def main():
 
     # --- モデルの初期化 ---
     print("Initializing model...")
+
+    # BitsAndBytes量子化設定の準備
+    quantization_config = None
+    if USE_4BIT_QUANTIZATION:
+        print("Setting up BitsAndBytes 4-bit quantization...")
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=getattr(torch, BNB_4BIT_COMPUTE_DTYPE),
+            bnb_4bit_quant_type=BNB_4BIT_QUANT_TYPE,
+            bnb_4bit_use_double_quant=BNB_4BIT_USE_DOUBLE_QUANT
+        )
+        print(f"BitsAndBytes 4-bit quantization enabled (compute_dtype: {BNB_4BIT_COMPUTE_DTYPE}, quant_type: {BNB_4BIT_QUANT_TYPE})")
+
     try:
-        # 量子化モデルを読み込む
+        # DeepSeek-R1モデルを4bit量子化で読み込む
+        print(f"Loading DeepSeek-R1 model from {MODEL_NAME}...")
         model = AutoModelForSequenceClassification.from_pretrained(
             MODEL_NAME,
             num_labels=n_classes,
             trust_remote_code=True,
-            device_map=None  # デバイスマッピングを無効化
+            quantization_config=quantization_config,  # BitsAndBytes用の設定
+            torch_dtype=getattr(torch, BNB_4BIT_COMPUTE_DTYPE) if USE_4BIT_QUANTIZATION else torch.bfloat16,
+            device_map="auto",  # 自動的にGPUに配置
+            low_cpu_mem_usage=True  # CPUメモリ使用量を削減
         )
         # パディングトークンIDを設定
         model.config.pad_token_id = tokenizer.pad_token_id
-    except:
+    except Exception as e:
         # 失敗した場合はカスタムクラスを使用
-        print("Using custom classification head for Qwen2...")
-        # ベースモデルを読み込む
-        base_model = AutoModel.from_pretrained(
-            MODEL_NAME,
-            trust_remote_code=True,
-            device_map=None
-        )
-        # カスタム分類ヘッドを作成
-        model = Qwen2ForSequenceClassification(MODEL_NAME, n_classes)
-        model.qwen = base_model
+        print(f"Using custom classification head for DeepSeek-R1: {str(e)}")
+        # カスタム分類ヘッドを作成（量子化設定を渡す）
+        model = DeepSeekR1ForSequenceClassification(MODEL_NAME, n_classes, quantization_config)
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
@@ -216,14 +239,33 @@ def main():
         task_type=TaskType.SEQ_CLS,
     )
 
+    # BitsAndBytes量子化モデル用の準備
+    if USE_4BIT_QUANTIZATION:
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=USE_GRADIENT_CHECKPOINTING)
+        print("Model prepared for 4-bit training with LoRA")
+    
     # PEFTモデルの作成
     model = get_peft_model(model, lora_config)
     print("Number of trainable parameters:")
     model.print_trainable_parameters()
 
-    # シングルGPUに設定
-    if torch.cuda.is_available():
-        model = model.cuda()
+    # 4bit量子化では自動的に適切な精度が設定されるため、手動キャストは不要
+
+    # Gradient checkpointingを有効化
+    if hasattr(model, 'enable_input_require_grads'):
+        model.enable_input_require_grads()
+
+    # モデルのgradient checkpointingを有効化
+    if hasattr(model.base_model, 'gradient_checkpointing_enable'):
+        model.base_model.gradient_checkpointing_enable()
+    elif hasattr(model, 'gradient_checkpointing_enable'):
+        model.gradient_checkpointing_enable()
+
+    # モデルは既にdevice_map="auto"でGPUに配置されている
+
+    # 追加のメモリ最適化
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
     # --- トレーニング引数の設定 ---
     training_args = TrainingArguments(
@@ -244,13 +286,16 @@ def main():
         greater_is_better=True,
         load_best_model_at_end=True,
         report_to="wandb" if USE_WANDB else "none",
-        bf16=True,  # RTX 5090の互換性問題のため一時的にFalse
-        gradient_checkpointing=False,  # インデックスエラーのため一時的に無効化
+        bf16=True,   # BitsAndBytes 4bit量子化ではbf16が推奨
+        fp16=False,  # bf16使用時はfp16を無効化
+        gradient_checkpointing=True,  # メモリ効率化のため有効化
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない
         lr_scheduler_type="cosine",  # コサインスケジューラーを使用
         warmup_ratio=0.0,  # ウォームアップを無効化
         save_total_limit=2,
+        max_grad_norm=MAX_GRAD_NORM,  # Gradient clipping
+        optim="paged_adamw_8bit" if USE_8BIT_ADAM else "adamw_torch",  # 8-bit Adam optimizer
     )
 
     # --- トレーナーのセットアップとトレーニング ---
