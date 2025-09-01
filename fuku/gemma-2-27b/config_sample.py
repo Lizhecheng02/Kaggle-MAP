@@ -33,6 +33,16 @@ LABEL_ENCODER_PATH = f"{OUTPUT_DIR}/label_encoder.joblib"
 RANDOM_SEED = 42
 VALIDATION_SPLIT = 0.2
 
+# Quantization (bitsandbytes) settings
+# 4bit量子化を有効/無効化
+USE_4BIT = True
+# 量子化方式: "nf4" または "fp4"
+BNB_4BIT_QUANT_TYPE = "nf4"
+# ダブル量子化を使用するか
+BNB_4BIT_USE_DOUBLE_QUANT = True
+# 計算dtypeの指定: "bf16" | "fp16" | "fp32" | None(自動)
+BNB_COMPUTE_DTYPE = "bf16"
+
 # GPU settings
 CUDA_VISIBLE_DEVICES = "0"  # GPU device to use. Set to None to use all available GPUs
 
