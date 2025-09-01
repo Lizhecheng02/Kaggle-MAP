@@ -5,6 +5,7 @@ wandb/
 *_cot_ver_*
 *.parquet
 *.ipynb
+map_*
 
 .vscode/
 
