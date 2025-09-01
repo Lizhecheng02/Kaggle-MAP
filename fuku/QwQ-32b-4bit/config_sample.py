@@ -4,7 +4,7 @@
 
 # Model configuration
 VER = "4bit"
-MODEL_NAME = "Qwen/QwQ-32B"
+MODEL_NAME = "/hdd/models/QwQ-32B"
 MODEL_TYPE = "qwen2"  # Add model type for proper handling
 EPOCHS = 3  # Reduce epochs for initial testing
 MAX_LEN = 300  # Increase max length for better context
@@ -18,8 +18,8 @@ EVAL_BATCH_SIZE = 8  # Eval can use larger batch size
 GRADIENT_ACCUMULATION_STEPS = 8  # Reduced to 32 for faster training
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 50
-SAVE_STEPS = 1722
-EVAL_STEPS = 1722
+SAVE_STEPS = 229
+EVAL_STEPS = 229
 
 
 # Data paths
