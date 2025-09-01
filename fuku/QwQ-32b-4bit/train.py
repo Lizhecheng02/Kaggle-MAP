@@ -246,11 +246,18 @@ def main():
     if hasattr(model, 'enable_input_require_grads'):
         model.enable_input_require_grads()
 
-    # モデルのgradient checkpointingを有効化
+    # モデルのgradient checkpointingを有効化（サポートされる場合）
     if hasattr(model.base_model, 'gradient_checkpointing_enable'):
         model.base_model.gradient_checkpointing_enable()
     elif hasattr(model, 'gradient_checkpointing_enable'):
         model.gradient_checkpointing_enable()
+
+    # Trainerがコール可能か判定（Peft経由で透過的に解決される想定）
+    supports_gradient_checkpointing = (
+        hasattr(model, 'gradient_checkpointing_enable') or
+        hasattr(getattr(model, 'base_model', None), 'gradient_checkpointing_enable')
+    )
+    print(f"Gradient checkpointing supported: {supports_gradient_checkpointing}")
 
     # モデルは既にdevice_map="auto"でGPUに配置されている
 
@@ -279,8 +286,8 @@ def main():
         report_to="wandb" if USE_WANDB else "none",
         bf16=False,  # 4bit量子化時は混合精度を無効化
         fp16=False,  # 4bit量子化時は混合精度を無効化
-        gradient_checkpointing=True,  # メモリ効率化のため有効化
-        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
+        gradient_checkpointing=supports_gradient_checkpointing,  # サポートされる場合のみ有効化
+        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため
         remove_unused_columns=False,  # カラムを削除しない
         lr_scheduler_type="cosine",  # コサインスケジューラーを使用
         warmup_ratio=0.0,  # ウォームアップを無効化
@@ -304,10 +311,10 @@ def main():
     print(f"Evaluation interval: every {EVAL_STEPS} steps (~{EVAL_STEPS/steps_per_epoch:.2f} epochs)")
     print(f"Early stopping after {EARLY_STOPPING_PATIENCE} evaluations without improvement")
 
-    # カスタムデータコレーターを使用
+    # カスタムデータコレクレーターを使用
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, max_length=MAX_LEN)
 
-    # アーリーストッピングコールバックの設定
+    # 早期停止・ベスト保存などのコールバック設定
     callbacks = []
 
     # SaveBestMap3Callbackを追加
