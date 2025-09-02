@@ -4,8 +4,6 @@ import numpy as np
 import torch
 from transformers import TrainerCallback
 
-from prompts import create_messages_v1
-
 
 def prepare_correct_answers(train_data):
     idx = train_data.apply(lambda row: row.Category.split("_")[0] == "True", axis=1)
@@ -17,19 +15,6 @@ def prepare_correct_answers(train_data):
     correct = correct.drop_duplicates(["QuestionId"])[["QuestionId", "MC_Answer"]]
     correct["is_correct"] = 1
     return correct
-
-
-def format_input(tokenizer, row, think: str = ""):
-    messages = create_messages_v1(row, think)
-
-    # Apply the model's chat template
-    prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,  # Return string, not tokens
-        add_generation_prompt=False,  # Don't add extra generation prompt since we have assistant message
-    )
-
-    return prompt
 
 
 def tokenize_dataset(dataset, tokenizer, max_len):

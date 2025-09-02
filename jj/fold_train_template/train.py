@@ -24,12 +24,12 @@ from config import Config
 from models import LLMForSequenceClassification
 from utils import (
     prepare_correct_answers,
-    format_input,
     tokenize_dataset,
     compute_map3,
     SaveBestMap3Callback,
     convert_numpy_to_list,
 )
+from prompts import prompt_registry
 
 import warnings
 
@@ -318,9 +318,13 @@ def main():
             tokenizer.pad_token_id = 100257
 
     print("Formatting input text...")
-    texts = []
+    # Get the prompt creation function
+    prompt_function = prompt_registry.get(cfg.PROMPT_VERSION, None)
+    
+    # Create the prompt using the function
+    texts = []    
     for _, row in train.iterrows():
-        t = format_input(tokenizer=tokenizer, row=row, think="")
+        t = prompt_function(tokenizer=tokenizer, row=row)
         texts.append(t)
     train["text"] = texts
 
@@ -358,6 +362,7 @@ def main():
                 config={
                     "fold_id": fold_id,
                     "model_name": cfg.MODEL_NAME,
+                    "seed": cfg.RANDOM_SEED,
                     "epochs": cfg.EPOCHS,
                     "max_len": cfg.MAX_LEN,
                     "train_batch_size": cfg.TRAIN_BATCH_SIZE,
@@ -423,7 +428,8 @@ def main():
             job_type="cv_summary",
             config={
                 "model_name": cfg.MODEL_NAME,
-                "epochs": cfg.cfg.EPOCHS,
+                "seed": cfg.RANDOM_SEED,
+                "epochs": cfg.EPOCHS,
                 "max_len": cfg.MAX_LEN,
                 "train_batch_size": cfg.TRAIN_BATCH_SIZE,
                 "eval_batch_size": cfg.EVAL_BATCH_SIZE,

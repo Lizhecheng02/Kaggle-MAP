@@ -7,49 +7,22 @@ class Config:
     # Model configuration
     VER: int = 1
     MODEL_NAME: str = "Qwen/Qwen3-0.6B"
-    EPOCHS: int = 3
-    MAX_LEN: int = 512
-    FOLDS: int = 5
-    
+
     DEBUG: bool = False
+    RANDOM_SEED: int = 326
     
-    # Training parameters
-    TRAIN_BATCH_SIZE: int = 4
-    EVAL_BATCH_SIZE: int = 4
-    GRADIENT_ACCUMULATION_STEPS: int = 16
-    LEARNING_RATE: float = 2e-4
-    LOGGING_STEPS: int = 10
-    SAVE_STEPS: int = 90
-    EVAL_STEPS: int = 90
+    # GPU settings
+    CUDA_VISIBLE_DEVICES: Optional[str] = None
     
     # Data paths
     TRAIN_DATA_PATH: str = "../outputs/train_fold.parquet"
     TEST_DATA_PATH: str = "../../input/map-charting-student-math-misunderstandings/test.csv"
     INFERENCE_DATA_PATH: str = "../outputs/train_fold.parquet"
-    
-    # Other settings
-    RANDOM_SEED: int = 42
-    VALIDATION_SPLIT: float = 0.2
-    LABEL_SMOOTHING_FACTOR: float = 0.0
-    TRAIN_FULL_DATA: bool = False
-    
-    # GPU settings
-    CUDA_VISIBLE_DEVICES: Optional[str] = None
-    
-    # Submission settings
-    SUBMISSION_OUTPUT_PATH: str = "submission.csv"
-    
-    # WandB settings
-    USE_WANDB: bool = True
-    WANDB_PROJECT: str = "map"
-    WANDB_ENTITY: Optional[str] = None
-    
-    # Early stopping settings
-    USE_EARLY_STOPPING: bool = True
-    EARLY_STOPPING_PATIENCE: int = 10
-    EARLY_STOPPING_THRESHOLD: float = 0.001
-    
-    WARM_UP: float = 0.0
+    FOLDS: int = 5    
+    MAX_LEN: int = 512
+
+    # Prompt
+    PROMPT_VERSION: str = "create_prompt_v1"
     
     # LoRA configurations
     LORA_RANK: int = 64
@@ -66,15 +39,41 @@ class Config:
     LORA_DROPOUT: float = 0.1
     LORA_BIAS: str = "none"  # "none", "all", "lora_only"
     USE_DORA: bool = False
+
+    # Training parameters
+    EPOCHS: int = 3
+    TRAIN_BATCH_SIZE: int = 32
+    EVAL_BATCH_SIZE: int = 32
+    GRADIENT_ACCUMULATION_STEPS: int = 2
+    LEARNING_RATE: float = 3e-4
+    LOGGING_STEPS: int = 10
+    SAVE_STEPS: int = 90
+    EVAL_STEPS: int = 90
+    LABEL_SMOOTHING_FACTOR: float = 0.0
+    TRAIN_FULL_DATA: bool = False
+    WARM_UP: float = 0.0
     
+    # Early stopping settings
+    USE_EARLY_STOPPING: bool = True
+    EARLY_STOPPING_PATIENCE: int = 10
+    EARLY_STOPPING_THRESHOLD: float = 0.001
+
     # Memory optimization settings
     USE_GRADIENT_CHECKPOINTING: bool = True
     USE_8BIT_ADAM: bool = False
     MAX_GRAD_NORM: float = 1.0
     
+    # Submission settings
+    SUBMISSION_OUTPUT_PATH: str = "submission.csv"
+    
+    # WandB settings
+    USE_WANDB: bool = True
+    WANDB_PROJECT: str = "map"
+    WANDB_ENTITY: Optional[str] = None
+    
     @property
     def OUTPUT_DIR(self) -> str:
-        return f"map_{self.MODEL_NAME.replace('/', '_')}_ver_{self.VER}"
+        return f"map_{self.MODEL_NAME.replace('/', '_')}_ver_{self.VER}_seed_{self.RANDOM_SEED}"
     
     @property
     def BEST_MODEL_PATH(self) -> str:
