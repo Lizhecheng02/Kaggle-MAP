@@ -4,8 +4,6 @@ import numpy as np
 import torch
 from transformers import TrainerCallback
 
-from prompts import create_messages_v1
-
 
 def prepare_correct_answers(train_data):
     idx = train_data.apply(lambda row: row.Category.split("_")[0] == "True", axis=1)
@@ -17,19 +15,6 @@ def prepare_correct_answers(train_data):
     correct = correct.drop_duplicates(["QuestionId"])[["QuestionId", "MC_Answer"]]
     correct["is_correct"] = 1
     return correct
-
-
-def format_input(tokenizer, row, think: str = ""):
-    messages = create_messages_v1(row, think)
-
-    # Apply the model's chat template
-    prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,  # Return string, not tokens
-        add_generation_prompt=False,  # Don't add extra generation prompt since we have assistant message
-    )
-
-    return prompt
 
 
 def tokenize_dataset(dataset, tokenizer, max_len):
@@ -75,22 +60,6 @@ class SaveBestMap3Callback(TrainerCallback):
             )
 
         return control
-
-
-def compute_map3(eval_pred):
-    logits, labels = eval_pred
-    probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
-    top3 = np.argsort(-probs, axis=1)[:, :3]
-    score = 0.0
-    for i, label in enumerate(labels):
-        ranks = top3[i]
-        if ranks[0] == label:
-            score += 1.0
-        elif ranks[1] == label:
-            score += 1.0 / 2
-        elif ranks[2] == label:
-            score += 1.0 / 3
-    return {"map@3": score / len(labels)}
 
 
 # Convert numpy arrays to lists for JSON serialization

@@ -21,11 +21,11 @@ from transformers import EarlyStoppingCallback
 
 # Import Custom Modules
 from config import Config
+from metrics import compute_map_k, calculate_aggregate_map_k
 from models import LLMForSequenceClassification
 from utils import (
     prepare_correct_answers,
     tokenize_dataset,
-    compute_map3,
     SaveBestMap3Callback,
     convert_numpy_to_list,
 )
@@ -34,34 +34,6 @@ from prompts import prompt_registry
 import warnings
 
 warnings.filterwarnings("ignore")
-
-
-def calculate_aggregate_map3(all_predictions, all_labels, k=3):
-    """
-    Calculate MAP@3 for all predictions combined
-    """
-    if len(all_predictions) == 0:
-        return 0.0
-
-    # Convert to numpy arrays
-    predictions = np.array(all_predictions)
-    labels = np.array(all_labels)
-
-    # Get top k predictions for each sample
-    top_k_preds = np.argsort(-predictions, axis=1)[:, :k]
-
-    # Calculate MAP@3
-    map_scores = []
-    for i, (pred_indices, true_label) in enumerate(zip(top_k_preds, labels)):
-        # Check if true label is in top k predictions
-        if true_label in pred_indices:
-            # Find position of true label (1-indexed)
-            position = np.where(pred_indices == true_label)[0][0] + 1
-            map_scores.append(1.0 / position)
-        else:
-            map_scores.append(0.0)
-
-    return np.mean(map_scores)
 
 
 def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
@@ -211,7 +183,7 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
         eval_dataset=val_ds,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        compute_metrics=compute_map3,
+        compute_metrics=lambda eval_pred: compute_map_k(eval_pred, k=3),
         callbacks=callbacks,
     )
 
@@ -242,6 +214,9 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
     val_predictions = torch.softmax(
         torch.tensor(predictions.predictions), dim=-1
     ).numpy()
+
+    # Get both logits and labels
+    val_logits = predictions.predictions
     val_labels = predictions.label_ids
 
     # Save fold model
@@ -258,6 +233,7 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
         "fold_id": fold_id,
         "map3_score": fold_map3,
         "predictions": val_predictions,
+        "logits": val_logits,
         "labels": val_labels,
         "val_indices": val_df.index.tolist(),
     }
@@ -320,9 +296,9 @@ def main():
     print("Formatting input text...")
     # Get the prompt creation function
     prompt_function = prompt_registry.get(cfg.PROMPT_VERSION, None)
-    
+
     # Create the prompt using the function
-    texts = []    
+    texts = []
     for _, row in train.iterrows():
         t = prompt_function(tokenizer=tokenizer, row=row)
         texts.append(t)
@@ -346,6 +322,11 @@ def main():
     all_predictions = []
     all_labels = []
     fold_scores = []
+
+    # Add new collections for out-of-fold logits (organized by original indices)
+    oof_logits = np.zeros((len(train), n_classes))
+    oof_labels = np.zeros(len(train), dtype=int)
+    oof_predictions_mask = np.zeros(len(train), dtype=bool)
 
     print(f"\nStarting {cfg.FOLDS}-fold cross-validation training...")
 
@@ -401,6 +382,23 @@ def main():
         all_labels.extend(fold_results["labels"])
         fold_scores.append(fold_results["map3_score"])
 
+        # Store out-of-fold logits organized by original indices
+        val_indices = fold_results["val_indices"]
+        fold_logits = fold_results["logits"]
+        fold_labels = fold_results["labels"]
+
+        # Map back to original dataframe indices
+        for i, orig_idx in enumerate(val_indices):
+            train_idx = train.index.get_loc(orig_idx)
+            oof_logits[train_idx] = fold_logits[i]
+            oof_labels[train_idx] = fold_labels[i]
+            oof_predictions_mask[train_idx] = True
+
+    # Verify all samples have predictions
+    if not np.all(oof_predictions_mask):
+        missing_count = np.sum(~oof_predictions_mask)
+        print(f"Warning: {missing_count} samples are missing out-of-fold predictions!")
+
     # Calculate aggregate metrics
     print(f"\n{'=' * 50}")
     print("CROSS-VALIDATION RESULTS")
@@ -413,7 +411,7 @@ def main():
     # Overall results
     mean_cv_score = np.mean(fold_scores)
     std_cv_score = np.std(fold_scores)
-    aggregate_map3 = calculate_aggregate_map3(all_predictions, all_labels)
+    aggregate_map3 = calculate_aggregate_map_k(all_predictions, all_labels, k=3)
 
     print(f"\nMean CV MAP@3: {mean_cv_score:.4f} (+/- {std_cv_score:.4f})")
     print(f"Aggregate MAP@3: {aggregate_map3:.4f}")
@@ -467,6 +465,22 @@ def main():
 
         main_run.finish()
 
+    # Save out-of-fold logits as numpy files
+    print("Saving out-of-fold logits...")
+
+    # Save comprehensive out-of-fold data
+    oof_data = {
+        "logits": oof_logits,
+        "labels": oof_labels,
+        "probabilities": torch.softmax(torch.tensor(oof_logits), dim=-1).numpy(),
+        "class_names": le.classes_,
+        "sample_indices": train.index.values,
+        "predictions_mask": oof_predictions_mask,
+    }
+
+    np.save(f"{cfg.OUTPUT_DIR}/oof_predictions.npy", oof_data)
+    print(f"Out-of-fold predictions saved to: {cfg.OUTPUT_DIR}/oof_predictions.npy")
+
     # Save all results
     results_summary = {
         "fold_scores": fold_scores,
@@ -476,6 +490,12 @@ def main():
         "all_predictions": convert_numpy_to_list(all_predictions),
         "all_labels": convert_numpy_to_list(all_labels),
         "detailed_results": convert_numpy_to_list(all_results),
+        "oof_logits_info": {
+            "shape": oof_logits.shape,
+            "n_classes": n_classes,
+            "class_names": le.classes_.tolist(),
+            "all_samples_predicted": np.all(oof_predictions_mask).item(),
+        },
     }
 
     # Also save as pickle for easier loading in Python
@@ -497,6 +517,8 @@ def main():
 
     print("\nCross-validation training completed successfully!")
     print(f"Results saved in: {cfg.OUTPUT_DIR}")
+    print(f"Out-of-fold logits shape: {oof_logits.shape}")
+    print(f"All samples have predictions: {np.all(oof_predictions_mask)}")
 
     if cfg.USE_WANDB and main_run:
         main_run.finish()

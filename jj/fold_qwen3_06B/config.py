@@ -8,8 +8,8 @@ class Config:
     VER: int = 1
     MODEL_NAME: str = "Qwen/Qwen3-0.6B"
 
-    DEBUG: bool = False
-    RANDOM_SEED: int = 326
+    DEBUG: bool = True
+    RANDOM_SEED: int = 42
     
     # GPU settings
     CUDA_VISIBLE_DEVICES: Optional[str] = None
