@@ -15,7 +15,7 @@ from datasets import Dataset
 from peft import PeftModel
 import joblib
 
-from config import *
+from config import Config
 from utils import format_input, prepare_correct_answers
 
 import warnings
@@ -33,18 +33,18 @@ def tokenize_function(examples, tokenizer, max_len):
     )
 
 
-def load_model_and_tokenizer():
+def load_model_and_tokenizer(cfg):
     print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME, trust_remote_code=True)
 
     # Only for Phi-4
-    if "microsoft/phi-4" in MODEL_NAME.lower():
+    if "microsoft/phi-4" in cfg.MODEL_NAME.lower():
         if tokenizer.pad_token is None:
             tokenizer.pad_token = "<|finetune_right_pad_id|>"
             tokenizer.pad_token_id = 100257
 
     print("Loading label encoder...")
-    label_encoder = joblib.load(LABEL_ENCODER_PATH)
+    label_encoder = joblib.load(cfg.LABEL_ENCODER_PATH)
     n_classes = len(label_encoder.classes_)
 
     print(f"Loading model with {n_classes} classes...")
@@ -57,7 +57,7 @@ def load_model_and_tokenizer():
     )
 
     model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_NAME,
+        cfg.MODEL_NAME,
         num_labels=n_classes,
         trust_remote_code=True,
         quantization_config=quantization_config,
@@ -66,7 +66,7 @@ def load_model_and_tokenizer():
     )
 
     print("Loading LoRA adapter...")
-    model = PeftModel.from_pretrained(model, BEST_MODEL_PATH)
+    model = PeftModel.from_pretrained(model, cfg.BEST_MODEL_PATH)
 
     if hasattr(model, "base_model"):
         model.base_model.config.pad_token_id = tokenizer.pad_token_id
@@ -85,9 +85,9 @@ def load_model_and_tokenizer():
     return model, tokenizer, label_encoder
 
 
-def prepare_data():
+def prepare_data(cfg):
     print("Loading training data...")
-    train_df = pd.read_csv(INFERENCE_DATA_PATH)
+    train_df = pd.read_csv(cfg.INFERENCE_DATA_PATH)
 
     print("Performing feature engineering...")
     correct = prepare_correct_answers(train_df)
@@ -101,12 +101,12 @@ def prepare_data():
     return train_df, dataset
 
 
-def inference_with_batches(model, tokenizer, dataset, batch_size=16):
+def inference_with_batches(cfg, model, tokenizer, dataset, batch_size=16):
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors="pt")
 
     print("Tokenizing dataset...")
     tokenized_dataset = dataset.map(
-        lambda x: tokenize_function(x, tokenizer, MAX_LEN),
+        lambda x: tokenize_function(x, tokenizer, cfg.MAX_LEN),
         batched=True,
         remove_columns=dataset.column_names,
     )
@@ -144,11 +144,13 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-    model, tokenizer, label_encoder = load_model_and_tokenizer()
+    cfg = Config()
 
-    train_df, dataset = prepare_data()
+    model, tokenizer, label_encoder = load_model_and_tokenizer(cfg)
 
-    batch_size = EVAL_BATCH_SIZE
+    train_df, dataset = prepare_data(cfg)
+
+    batch_size = cfg.EVAL_BATCH_SIZE
     if torch.cuda.is_available():
         batch_size = 32
     try:
@@ -165,11 +167,11 @@ def main():
                 model, tokenizer, dataset, batch_size
             )
 
-    print(f"\nInference completed!")
+    print("\nInference completed!")
     print(f"Shape of probabilities: {probabilities.shape}")
     print(f"Expected shape: ({len(train_df)}, {len(label_encoder.classes_)})")
 
-    output_path = os.path.join(OUTPUT_DIR, "train_probabilities.npy")
+    output_path = os.path.join(cfg.OUTPUT_DIR, "train_probabilities.npy")
     np.save(output_path, probabilities)
     print(f"\nProbabilities saved to: {output_path}")
 

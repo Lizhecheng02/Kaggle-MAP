@@ -9,9 +9,6 @@ from prompts import create_messages_v1
 
 def prepare_correct_answers(train_data):
     idx = train_data.apply(lambda row: row.Category.split("_")[0] == "True", axis=1)
-
-    print(idx)
-
     correct = train_data.loc[idx].copy()
     correct["c"] = correct.groupby(["QuestionId", "MC_Answer"]).MC_Answer.transform(
         "count"
@@ -25,19 +22,17 @@ def prepare_correct_answers(train_data):
 def format_input(tokenizer, row, think: str = ""):
     messages = create_messages_v1(row, think)
 
-
     # Apply the model's chat template
     prompt = tokenizer.apply_chat_template(
-        messages, 
+        messages,
         tokenize=False,  # Return string, not tokens
-        add_generation_prompt=False  # Don't add extra generation prompt since we have assistant message
+        add_generation_prompt=False,  # Don't add extra generation prompt since we have assistant message
     )
-    
+
     return prompt
 
 
 def tokenize_dataset(dataset, tokenizer, max_len):
-
     def tokenize(batch):
         return tokenizer(
             batch["text"],
@@ -96,6 +91,22 @@ def compute_map3(eval_pred):
         elif ranks[2] == label:
             score += 1.0 / 3
     return {"map@3": score / len(labels)}
+
+
+# Convert numpy arrays to lists for JSON serialization
+def convert_numpy_to_list(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, list):
+        return [convert_numpy_to_list(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_to_list(value) for key, value in obj.items()}
+    else:
+        return obj
 
 
 def create_submission(predictions, test_data, label_encoder):

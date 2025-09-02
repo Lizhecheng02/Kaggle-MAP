@@ -1,76 +1,89 @@
-# Model configuration
-VER = 1
-MODEL_NAME = "Qwen/Qwen3-0.6B"
-EPOCHS = 3
-MAX_LEN = 512
-FOLDS = 5
-
-# Directory settings
-OUTPUT_DIR = f"map_{MODEL_NAME.replace('/', '_')}_ver_{VER}"
-
-# Training parameters
-TRAIN_BATCH_SIZE = 16
-EVAL_BATCH_SIZE = 16
-GRADIENT_ACCUMULATION_STEPS = 4
-LEARNING_RATE = 2e-4
-LOGGING_STEPS = 10
-SAVE_STEPS = 90
-EVAL_STEPS = 90
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 
-# Data paths
-TRAIN_DATA_PATH = "../outputs/train_fold.parquet"
-TEST_DATA_PATH = "../../input/map-charting-student-math-misunderstandings/test.csv"
-INFERENCE_DATA_PATH = "../outputs/train_fold.parquet"
-
-# Model save paths
-BEST_MODEL_PATH = f"{OUTPUT_DIR}/best"
-LABEL_ENCODER_PATH = f"{OUTPUT_DIR}/label_encoder.joblib"
-
-# Other settings
-RANDOM_SEED = 42
-VALIDATION_SPLIT = 0.2
-
-LABEL_SMOOTHING_FACTOR = 0.0
-
-TRAIN_FULL_DATA = False
-
-# GPU settings
-CUDA_VISIBLE_DEVICES = None
-
-# Submission settings
-SUBMISSION_OUTPUT_PATH = "submission.csv"
-
-# WandB settings
-USE_WANDB = True
-WANDB_PROJECT = "map"
-WANDB_RUN_NAME = OUTPUT_DIR
-WANDB_ENTITY = None
-
-# Early stopping settings
-USE_EARLY_STOPPING = True
-EARLY_STOPPING_PATIENCE = 10
-EARLY_STOPPING_THRESHOLD = 0.001
-
-WARM_UP = 0.0
-
-# LoRA configurations
-LORA_RANK = 64
-LORA_ALPHA = 128
-LORA_TARGET_MODULES = [
-    "q_proj",
-    "v_proj",
-    "k_proj",
-    "o_proj",
-    "gate_proj",
-    "up_proj",
-    "down_proj",
-]
-LORA_DROPOUT = 0.1
-LORA_BIAS = "none"  # "none", "all", "lora_only"
-USE_DORA = False
-
-# Memory optimization settings
-USE_GRADIENT_CHECKPOINTING = True  # Enable gradient checkpointing
-USE_8BIT_ADAM = False  # Use 8-bit Adam optimizer for memory efficiency
-MAX_GRAD_NORM = 1.0  # Gradient clipping value
+@dataclass
+class Config:
+    # Model configuration
+    VER: int = 1
+    MODEL_NAME: str = "Qwen/Qwen3-0.6B"
+    EPOCHS: int = 3
+    MAX_LEN: int = 512
+    FOLDS: int = 5
+    
+    DEBUG: bool = False
+    
+    # Training parameters
+    TRAIN_BATCH_SIZE: int = 4
+    EVAL_BATCH_SIZE: int = 4
+    GRADIENT_ACCUMULATION_STEPS: int = 16
+    LEARNING_RATE: float = 2e-4
+    LOGGING_STEPS: int = 10
+    SAVE_STEPS: int = 90
+    EVAL_STEPS: int = 90
+    
+    # Data paths
+    TRAIN_DATA_PATH: str = "../outputs/train_fold.parquet"
+    TEST_DATA_PATH: str = "../../input/map-charting-student-math-misunderstandings/test.csv"
+    INFERENCE_DATA_PATH: str = "../outputs/train_fold.parquet"
+    
+    # Other settings
+    RANDOM_SEED: int = 42
+    VALIDATION_SPLIT: float = 0.2
+    LABEL_SMOOTHING_FACTOR: float = 0.0
+    TRAIN_FULL_DATA: bool = False
+    
+    # GPU settings
+    CUDA_VISIBLE_DEVICES: Optional[str] = None
+    
+    # Submission settings
+    SUBMISSION_OUTPUT_PATH: str = "submission.csv"
+    
+    # WandB settings
+    USE_WANDB: bool = True
+    WANDB_PROJECT: str = "map"
+    WANDB_ENTITY: Optional[str] = None
+    
+    # Early stopping settings
+    USE_EARLY_STOPPING: bool = True
+    EARLY_STOPPING_PATIENCE: int = 10
+    EARLY_STOPPING_THRESHOLD: float = 0.001
+    
+    WARM_UP: float = 0.0
+    
+    # LoRA configurations
+    LORA_RANK: int = 64
+    LORA_ALPHA: int = 128
+    LORA_TARGET_MODULES: List[str] = field(default_factory=lambda: [
+        "q_proj",
+        "v_proj",
+        "k_proj", 
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    ])
+    LORA_DROPOUT: float = 0.1
+    LORA_BIAS: str = "none"  # "none", "all", "lora_only"
+    USE_DORA: bool = False
+    
+    # Memory optimization settings
+    USE_GRADIENT_CHECKPOINTING: bool = True
+    USE_8BIT_ADAM: bool = False
+    MAX_GRAD_NORM: float = 1.0
+    
+    @property
+    def OUTPUT_DIR(self) -> str:
+        return f"map_{self.MODEL_NAME.replace('/', '_')}_ver_{self.VER}"
+    
+    @property
+    def BEST_MODEL_PATH(self) -> str:
+        return f"{self.OUTPUT_DIR}/best"
+    
+    @property
+    def LABEL_ENCODER_PATH(self) -> str:
+        return f"{self.OUTPUT_DIR}/label_encoder.joblib"
+    
+    @property
+    def WANDB_RUN_NAME(self) -> str:
+        return self.OUTPUT_DIR

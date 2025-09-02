@@ -19,7 +19,7 @@ except ImportError:
     PEFT_AVAILABLE = False
     print("Warning: PEFT not available, will use base model only")
 
-from config import *
+from config import Config
 from utils import (
     prepare_correct_answers,
     format_input,
@@ -41,14 +41,16 @@ def main():
 
     print("Loading label encoder...")
 
-    le = joblib.load(LABEL_ENCODER_PATH)
+    cfg = Config()
+
+    le = joblib.load(cfg.LABEL_ENCODER_PATH)
     n_classes = len(le.classes_)
 
     print("Loading trained model and tokenizer...")
 
     if PEFT_AVAILABLE:
-        print(f"Loading fine-tuned LoRA model from: {BEST_MODEL_PATH}")
-        print(f"Loading base model from: {MODEL_NAME}")
+        print(f"Loading fine-tuned LoRA model from: {cfg.BEST_MODEL_PATH}")
+        print(f"Loading base model from: {cfg.MODEL_NAME}")
 
         from transformers import BitsAndBytesConfig
 
@@ -60,27 +62,30 @@ def main():
         )
 
         model = AutoModelForSequenceClassification.from_pretrained(
-            MODEL_NAME,
+            cfg.MODEL_NAME,
             num_labels=n_classes,
             trust_remote_code=True,
             quantization_config=quantization_config,
-            device_map="auto",  # 自動的に複数GPUに分散
-            low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
+            device_map="auto",
+            low_cpu_mem_usage=True,
         )
 
-        model = PeftModel.from_pretrained(model, BEST_MODEL_PATH)
+        model = PeftModel.from_pretrained(model, cfg.BEST_MODEL_PATH)
 
         model.eval()
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            cfg.MODEL_NAME, trust_remote_code=True
+        )
         print("Successfully loaded LoRA fine-tuned model")
     else:
         raise ImportError(
             "PEFT is required to load the fine-tuned model. Please install peft: pip install peft"
         )
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = "<|finetune_right_pad_id|>"
-        tokenizer.pad_token_id = 100257
+    if "microsoft/phi-4" in cfg.MODEL_NAME.lower():
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = "<|finetune_right_pad_id|>"
+            tokenizer.pad_token_id = 100257
 
     if hasattr(model, "base_model"):
         model.base_model.config.pad_token_id = tokenizer.pad_token_id
@@ -90,10 +95,10 @@ def main():
         model.config.pad_token_id = tokenizer.pad_token_id
 
     print("Loading test data...")
-    test = pd.read_csv(TEST_DATA_PATH)
+    test = pd.read_csv(cfg.TEST_DATA_PATH)
 
     print("Loading training data for correct answers...")
-    train = pd.read_csv(TRAIN_DATA_PATH)
+    train = pd.read_csv(cfg.TRAIN_DATA_PATH)
     train.Misconception = train.Misconception.fillna("NA")
     correct = prepare_correct_answers(train)
 
@@ -104,7 +109,7 @@ def main():
 
     print("Tokenizing test data...")
     ds_test = Dataset.from_pandas(test[["text"]])
-    ds_test = tokenize_dataset(ds_test, tokenizer, MAX_LEN)
+    ds_test = tokenize_dataset(ds_test, tokenizer, cfg.MAX_LEN)
 
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
@@ -120,7 +125,7 @@ def main():
         args=TrainingArguments(
             output_dir="./tmp",
             report_to="none",
-            per_device_eval_batch_size=EVAL_BATCH_SIZE,
+            per_device_eval_batch_size=cfg.EVAL_BATCH_SIZE,
             fp16=True,
             dataloader_pin_memory=True,
             dataloader_num_workers=2,
@@ -134,8 +139,8 @@ def main():
 
     submission = create_submission(predictions, test, le)
 
-    submission.to_csv(SUBMISSION_OUTPUT_PATH, index=False)
-    print(f"Submission file saved to: {SUBMISSION_OUTPUT_PATH}")
+    submission.to_csv(cfg.SUBMISSION_OUTPUT_PATH, index=False)
+    print(f"Submission file saved to: {cfg.SUBMISSION_OUTPUT_PATH}")
     print("\nSubmission preview:")
     print(submission.head())
     print(f"\nSubmission shape: {submission.shape}")
