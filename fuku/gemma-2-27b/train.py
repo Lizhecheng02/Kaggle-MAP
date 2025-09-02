@@ -43,16 +43,49 @@ try:
 except NameError:
     USE_4BIT = True
 
-# Compute dtype selection
-COMPUTE_DTYPE = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+# Compute dtype selection (configurable via config.py)
+def _resolve_dtype(dtype_name: str):
+    mapping = {
+        "bf16": torch.bfloat16,
+        "fp16": torch.float16,
+        "fp32": torch.float32,
+        None: None,
+    }
+    return mapping.get(dtype_name, None)
+
+try:
+    BNB_COMPUTE_DTYPE  # from config.py, string or None
+except NameError:
+    BNB_COMPUTE_DTYPE = None
+
+_cfg_dtype = _resolve_dtype(BNB_COMPUTE_DTYPE)
+COMPUTE_DTYPE = (
+    _cfg_dtype
+    if _cfg_dtype is not None
+    else (torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16)
+)
+
+try:
+    BNB_4BIT_QUANT_TYPE
+except NameError:
+    BNB_4BIT_QUANT_TYPE = "nf4"
+
+try:
+    BNB_4BIT_USE_DOUBLE_QUANT
+except NameError:
+    BNB_4BIT_USE_DOUBLE_QUANT = True
 
 # Global BitsAndBytes config (used if available)
-BNB_CONFIG = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=COMPUTE_DTYPE,
-    bnb_4bit_use_double_quant=True,
-) if BNB_AVAILABLE and USE_4BIT else None
+BNB_CONFIG = (
+    BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type=BNB_4BIT_QUANT_TYPE,
+        bnb_4bit_compute_dtype=COMPUTE_DTYPE,
+        bnb_4bit_use_double_quant=BNB_4BIT_USE_DOUBLE_QUANT,
+    )
+    if BNB_AVAILABLE and USE_4BIT
+    else None
+)
 
 class SaveBestMap3Callback(TrainerCallback):
     """eval_map@3が最高値を更新した際にモデルを保存するコールバック"""
@@ -159,6 +192,10 @@ def main():
                 "lora_alpha": LORA_ALPHA,
                 "lora_dropout": LORA_DROPOUT,
                 "lora_target_modules": LORA_TARGET_MODULES,
+                "use_4bit": USE_4BIT,
+                "bnb_4bit_quant_type": BNB_4BIT_QUANT_TYPE,
+                "bnb_4bit_use_double_quant": BNB_4BIT_USE_DOUBLE_QUANT,
+                "bnb_compute_dtype": BNB_COMPUTE_DTYPE if BNB_COMPUTE_DTYPE is not None else ("bf16" if COMPUTE_DTYPE==torch.bfloat16 else "fp16"),
             }
         )
 

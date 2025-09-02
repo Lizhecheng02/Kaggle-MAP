@@ -1,5 +1,5 @@
 """
-Qwen-3-0.6B モデル推論スクリプト - 提出用予測ファイルの生成
+DeepSeek-R1-Distill-Qwen-32B モデル推論スクリプト（bitsandbytes 4bit版） - 提出用予測ファイルの生成
 """
 
 import pandas as pd
@@ -8,7 +8,8 @@ from transformers import (
     AutoTokenizer,
     Trainer,
     TrainingArguments,
-    DataCollatorWithPadding
+    DataCollatorWithPadding,
+    BitsAndBytesConfig
 )
 from datasets import Dataset
 import joblib
@@ -57,13 +58,26 @@ def main():
         print(f"Loading fine-tuned LoRA model from: {BEST_MODEL_PATH}")
         print(f"Loading base model from: {MODEL_NAME}")
 
-        # AWQモデルは既に量子化済みなので追加の量子化設定は不要
+        # BitsAndBytes 4bit量子化設定
+        if USE_4BIT_QUANTIZATION:
+            print("Setting up BitsAndBytes 4-bit quantization for inference...")
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=getattr(torch, BNB_4BIT_COMPUTE_DTYPE),
+                bnb_4bit_quant_type=BNB_4BIT_QUANT_TYPE,
+                bnb_4bit_use_double_quant=BNB_4BIT_USE_DOUBLE_QUANT
+            )
+        else:
+            quantization_config = None
+
+        # DeepSeek-R1モデルを量子化で読み込み
         model = AutoModelForSequenceClassification.from_pretrained(
             MODEL_NAME,
             num_labels=n_classes,
             trust_remote_code=True,
-            torch_dtype="auto",  # AWQモデルに最適な精度を自動選択
-            device_map="auto",  # 自動的に複数GPUに分散
+            quantization_config=quantization_config,  # BitsAndBytes設定
+            torch_dtype=getattr(torch, BNB_4BIT_COMPUTE_DTYPE) if USE_4BIT_QUANTIZATION else torch.bfloat16,
+            device_map="auto",  # 自動的にGPUに配置
             low_cpu_mem_usage=True  # CPUメモリ使用量を削減
         )
 
@@ -72,11 +86,10 @@ def main():
 
         # 推論モードに設定（メモリ効率化）
         model.eval()
-        # AWQモデルは既にGPUに配置されているのでto('cuda')は不要
 
         # トークナイザーはベースモデルから読み込む
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-        print("Successfully loaded LoRA fine-tuned AWQ model")
+        print("Successfully loaded LoRA fine-tuned DeepSeek-R1 model with BitsAndBytes 4-bit quantization")
     else:
         # PEFTが利用できない場合はエラー
         raise ImportError("PEFT is required to load the fine-tuned model. Please install peft: pip install peft")
@@ -134,7 +147,7 @@ def main():
             output_dir="./tmp",  # 一時ディレクトリ（必須パラメータ）
             report_to="none",    # wandbを無効化
             per_device_eval_batch_size=EVAL_BATCH_SIZE,  # 設定ファイルから取得
-            fp16=True,  # AWQではfp16が推奨
+            bf16=True,  # BitsAndBytes 4bit量子化ではbf16が推奨
             dataloader_pin_memory=True,  # データローダーの高速化
             dataloader_num_workers=2,  # データ読み込みの並列化
         )

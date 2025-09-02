@@ -19,5 +19,4 @@
   - 新規依存を `suggested_commands.md` に追記。
 
 - リスク/既知の注意点
-  - `augmentation` モジュールが未同梱。`USE_DATA_AUGMENTATION=True` にする場合は別途実装を追加。
   - Kaggle 以外の環境ではデータパスを調整すること。

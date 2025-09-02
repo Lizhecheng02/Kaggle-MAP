@@ -27,4 +27,4 @@
 - Kaggle 環境のファイルパス前提（`/kaggle/input/...`）。ローカル実行時は `config.py` を適宜変更。
 
 ## 既知の注意点
-- `train.py` には `augmentation` モジュールの参照があるが、レポ内にファイルは見当たらない。`USE_DATA_AUGMENTATION=False`（既定）なら影響なし。必要なら別途追加。
+- 特になし

@@ -1,10 +1,11 @@
 """
-Qwen-3-0.6B モデル推論スクリプト - 提出用予測ファイルの生成
+QwQ-32B モデル推論スクリプト - 提出用予測ファイルの生成
 """
 
 import pandas as pd
 from transformers import (
     AutoModelForSequenceClassification,
+    AutoModelForCausalLM,
     AutoTokenizer,
     Trainer,
     TrainingArguments,
@@ -57,34 +58,40 @@ def main():
         print(f"Loading fine-tuned LoRA model from: {BEST_MODEL_PATH}")
         print(f"Loading base model from: {MODEL_NAME}")
 
-        # AWQモデルは既に量子化済みなので追加の量子化設定は不要
-        model = AutoModelForSequenceClassification.from_pretrained(
-            MODEL_NAME,
-            num_labels=n_classes,
-            trust_remote_code=True,
-            torch_dtype="auto",  # AWQモデルに最適な精度を自動選択
-            device_map="auto",  # 自動的に複数GPUに分散
-            low_cpu_mem_usage=True  # CPUメモリ使用量を削減
+        # ベースモデルを読み込む（4bit量子化で読み込み）
+        from transformers import BitsAndBytesConfig
+
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,  # QwQ-32Bはbfloat16を使用
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4"
         )
+
+        # QwQ-32BはCausalLMとして読み込み、カスタムクラシファイアを使用
+        print("Loading QwQ-32B base model...")
+        from train import QwQForSequenceClassification
+        model = QwQForSequenceClassification(MODEL_NAME, n_classes, quantization_config)
 
         # LoRAアダプターを適用
         model = PeftModel.from_pretrained(model, BEST_MODEL_PATH)
 
         # 推論モードに設定（メモリ効率化）
         model.eval()
-        # AWQモデルは既にGPUに配置されているのでto('cuda')は不要
+        # 4bit量子化モデルは既にGPUに配置されているのでto('cuda')は不要
 
         # トークナイザーはベースモデルから読み込む
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-        print("Successfully loaded LoRA fine-tuned AWQ model")
+        print("Successfully loaded LoRA fine-tuned QwQ-32B model")
     else:
         # PEFTが利用できない場合はエラー
         raise ImportError("PEFT is required to load the fine-tuned model. Please install peft: pip install peft")
 
     # パディングトークンの設定
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
+        # QwQ-32B用のパディングトークン設定
+        tokenizer.pad_token_id = 0  # UNK tokenを使用
+        tokenizer.pad_token = tokenizer.decode([0])
 
     # モデルの設定を更新（PeftModelのbase_modelにアクセス）
     if hasattr(model, 'base_model'):
@@ -134,7 +141,7 @@ def main():
             output_dir="./tmp",  # 一時ディレクトリ（必須パラメータ）
             report_to="none",    # wandbを無効化
             per_device_eval_batch_size=EVAL_BATCH_SIZE,  # 設定ファイルから取得
-            fp16=True,  # AWQではfp16が推奨
+            bf16=True,  # bfloat16を使用（QwQ-32B推奨）
             dataloader_pin_memory=True,  # データローダーの高速化
             dataloader_num_workers=2,  # データ読み込みの並列化
         )
