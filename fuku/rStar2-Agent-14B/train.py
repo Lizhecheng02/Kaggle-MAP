@@ -1,5 +1,5 @@
 """
-QwQ-32B モデルトレーニングスクリプト
+Phi-4 モデルトレーニングスクリプト
 """
 
 import os
@@ -10,18 +10,16 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from transformers import (
     AutoModelForSequenceClassification,
-    AutoModelForCausalLM,
     AutoTokenizer,
     TrainingArguments,
     Trainer,
-    AutoConfig,
-    BitsAndBytesConfig
+    AutoConfig
 )
 from datasets import Dataset
 import joblib
 import torch
 import torch.nn as nn
-from peft import LoraConfig, get_peft_model, TaskType, PeftModel, prepare_model_for_kbit_training
+from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 from transformers import AutoModel
 import wandb
 from transformers import EarlyStoppingCallback, TrainerCallback
@@ -42,6 +40,10 @@ class SaveBestMap3Callback(TrainerCallback):
 
     def on_evaluate(self, args, state, control, metrics, model=None, **kwargs):
         current_map3 = metrics.get('eval_map@3', 0.0)
+        current_step = state.global_step
+        total_steps = state.max_steps if state.max_steps else "N/A"
+        
+        print(f"\n[Step {current_step}/{total_steps}] 評価実行 - MAP@3スコア: {current_map3:.4f}")
 
         if current_map3 > self.best_map3:
             self.best_map3 = current_map3
@@ -54,55 +56,28 @@ class SaveBestMap3Callback(TrainerCallback):
             model.save_pretrained(best_map3_path)
             self.tokenizer.save_pretrained(best_map3_path)
 
-            print(f"\n新しいベストMAP@3スコア: {current_map3:.4f} - モデルを {best_map3_path} に保存しました")
+            print(f"🎉 新しいベストMAP@3スコア更新: {current_map3:.4f} (Step {current_step}) - モデルを {best_map3_path} に保存しました")
+        else:
+            print(f"現在のベストMAP@3スコア: {self.best_map3:.4f} (変更なし)")
 
         return control
 
 
-class QwQForSequenceClassification(nn.Module):
-    """QwQ-32Bモデルを分類タスク用にカスタマイズ"""
-    def __init__(self, model_name, num_labels, quantization_config=None):
+class Phi4ForSequenceClassification(nn.Module):
+    """Phi-4モデルを分類タスク用にカスタマイズ"""
+    def __init__(self, model_name, num_labels, attn_implementation="eager"):
         super().__init__()
-        if quantization_config is not None:
-            self.base_model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                trust_remote_code=True,
-                quantization_config=quantization_config,
-                device_map="auto",
-                low_cpu_mem_usage=True,
-            )
-        else:
-            self.base_model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                trust_remote_code=True,
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-                low_cpu_mem_usage=True,
-            )
+        from transformers import AutoModel
+        self.phi = AutoModel.from_pretrained(
+            model_name, 
+            trust_remote_code=True,
+            attn_implementation=attn_implementation
+        )
         self.dropout = nn.Dropout(0.1)
-        self.classifier = nn.Linear(self.base_model.config.hidden_size, num_labels)
-        self.config = self.base_model.config
+        self.classifier = nn.Linear(self.phi.config.hidden_size, num_labels)
 
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        labels=None,
-        inputs_embeds=None,
-        **kwargs,
-    ):
-        # PEFTのk-bit学習や勾配チェックポイント有効時にinputs_embedsが渡される場合がある
-        if inputs_embeds is not None:
-            outputs = self.base_model.model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-            )
-        else:
-            outputs = self.base_model.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-            )
-
+    def forward(self, input_ids, attention_mask=None, labels=None):
+        outputs = self.phi(input_ids=input_ids, attention_mask=attention_mask)
         # 最後のトークンの隠れ状態を使用
         pooled_output = outputs.last_hidden_state[:, -1, :]
         pooled_output = self.dropout(pooled_output)
@@ -113,11 +88,20 @@ class QwQForSequenceClassification(nn.Module):
             loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
 
-        return type("Output", (), {"loss": loss, "logits": logits})()
+        return type('Output', (), {'loss': loss, 'logits': logits})()
 
 
 def main():
     """メイントレーニング関数"""
+
+    # config.pyの内容を出力
+    print("=" * 80)
+    print("Configuration Settings (config.py):")
+    print("=" * 80)
+    with open('config.py', 'r', encoding='utf-8') as f:
+        print(f.read())
+    print("=" * 80)
+    print()
 
     # WandBの初期化
     if USE_WANDB:
@@ -138,6 +122,8 @@ def main():
                 "lora_target_modules": LORA_TARGET_MODULES,
                 "lora_dropout": LORA_DROPOUT,
                 "lora_bias": LORA_BIAS,
+                "use_dora": USE_DORA,
+                "attention_implementation": ATTENTION_IMPLEMENTATION,
             }
         )
 
@@ -179,13 +165,26 @@ def main():
     print("Initializing tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
 
-    # パディングトークンの設定
-    # Qwen3モデルの場合、特別なトークンIDを使用
+    # パディングトークンの設定（モデルタイプに応じて）
     if tokenizer.pad_token is None:
-        # 語彙内の安全なトークンIDを使用
-        # Qwenモデルでは、0番のトークンがUNKNOWNトークンとして使われることが多い
-        tokenizer.pad_token_id = 0
-        tokenizer.pad_token = tokenizer.decode([0])
+        if MODEL_TYPE.lower().startswith("phi"):
+            # Phi-4 の特殊パディングトークンが語彙にあればそれを使い、
+            # なければ一般的に EOS を PAD として使用
+            try:
+                pad_id = tokenizer.convert_tokens_to_ids("<|finetune_right_pad_id|>")
+                if pad_id is not None and pad_id != -1 and pad_id != tokenizer.unk_token_id:
+                    tokenizer.pad_token = "<|finetune_right_pad_id|>"
+                    tokenizer.pad_token_id = pad_id
+                else:
+                    tokenizer.pad_token = tokenizer.eos_token
+                    tokenizer.pad_token_id = tokenizer.eos_token_id
+            except Exception:
+                tokenizer.pad_token = tokenizer.eos_token
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+        else:
+            # 汎用モデル（例: rStar2-Agent-14B）では EOS を PAD として使用
+            tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.pad_token_id = tokenizer.eos_token_id
 
     # --- トークン長の分析 ---
     print("Analyzing token lengths...")
@@ -220,25 +219,35 @@ def main():
 
     # --- モデルの初期化 ---
     print("Initializing model...")
-
-    # 4bit量子化設定の準備
-    quantization_config = None
-    if USE_4BIT_QUANTIZATION:
-        print("Setting up 4-bit quantization...")
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=getattr(torch, BNB_4BIT_COMPUTE_DTYPE),
-            bnb_4bit_quant_type=BNB_4BIT_QUANT_TYPE,
-            bnb_4bit_use_double_quant=BNB_4BIT_USE_DOUBLE_QUANT,
-            bnb_4bit_quant_storage_dtype=getattr(torch, BNB_4BIT_QUANT_STORAGE_DTYPE)
+    print(f"Using attention implementation: {ATTENTION_IMPLEMENTATION}")
+    try:
+        # 量子化モデルを読み込む
+        model = AutoModelForSequenceClassification.from_pretrained(
+            MODEL_NAME,
+            num_labels=n_classes,
+            trust_remote_code=True,
+            device_map=None,  # デバイスマッピングを無効化
+            torch_dtype=torch.bfloat16,  # BF16で読み込み
+            low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
+            attn_implementation=ATTENTION_IMPLEMENTATION  # Attention実装を指定
         )
-        print(f"4-bit quantization enabled with {BNB_4BIT_QUANT_TYPE} quantization")
-
-    # QwQ-32Bは分類用のヘッドが標準では提供されていないため、カスタムクラスを使用
-    print("Using custom classification head for QwQ-32B...")
-    model = QwQForSequenceClassification(MODEL_NAME, n_classes, quantization_config)
-    # パディングトークンIDを設定
-    model.config.pad_token_id = tokenizer.pad_token_id
+        # パディングトークンIDを設定
+        model.config.pad_token_id = tokenizer.pad_token_id
+    except:
+        # 失敗した場合はカスタムクラスを使用
+        print("Using custom classification head for Phi-4...")
+        # ベースモデルを読み込む
+        base_model = AutoModel.from_pretrained(
+            MODEL_NAME,
+            trust_remote_code=True,
+            device_map=None,
+            torch_dtype=torch.bfloat16,  # BF16で読み込み
+            low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
+            attn_implementation=ATTENTION_IMPLEMENTATION  # Attention実装を指定
+        )
+        # カスタム分類ヘッドを作成
+        model = Phi4ForSequenceClassification(MODEL_NAME, n_classes, ATTENTION_IMPLEMENTATION)
+        model.phi = base_model
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
@@ -249,12 +258,9 @@ def main():
         lora_dropout=LORA_DROPOUT,
         bias=LORA_BIAS,
         task_type=TaskType.SEQ_CLS,
+        use_dora=USE_DORA  # DoRAの使用
     )
 
-    # 4bit量子化モデルをトレーニング用に準備
-    if USE_4BIT_QUANTIZATION:
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-    
     # PEFTモデルの作成
     model = get_peft_model(model, lora_config)
     print("Number of trainable parameters:")
@@ -264,20 +270,15 @@ def main():
     if hasattr(model, 'enable_input_require_grads'):
         model.enable_input_require_grads()
 
-    # モデルのgradient checkpointingを有効化（サポートされる場合）
+    # モデルのgradient checkpointingを有効化
     if hasattr(model.base_model, 'gradient_checkpointing_enable'):
         model.base_model.gradient_checkpointing_enable()
     elif hasattr(model, 'gradient_checkpointing_enable'):
         model.gradient_checkpointing_enable()
 
-    # Trainerがコール可能か判定（Peft経由で透過的に解決される想定）
-    supports_gradient_checkpointing = (
-        hasattr(model, 'gradient_checkpointing_enable') or
-        hasattr(getattr(model, 'base_model', None), 'gradient_checkpointing_enable')
-    )
-    print(f"Gradient checkpointing supported: {supports_gradient_checkpointing}")
-
-    # モデルは既にdevice_map="auto"でGPUに配置されている
+    # シングルGPUに設定
+    if torch.cuda.is_available():
+        model = model.cuda()
 
     # 追加のメモリ最適化
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -302,16 +303,15 @@ def main():
         greater_is_better=True,
         load_best_model_at_end=True,
         report_to="wandb" if USE_WANDB else "none",
-        bf16=False,  # 4bit量子化時は混合精度を無効化
-        fp16=False,  # 4bit量子化時は混合精度を無効化
-        gradient_checkpointing=supports_gradient_checkpointing,  # サポートされる場合のみ有効化
-        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため
+        bf16=True,  # BF16を使用
+        gradient_checkpointing=True,  # メモリ効率化のため有効化
+        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない
         lr_scheduler_type="cosine",  # コサインスケジューラーを使用
         warmup_ratio=0.0,  # ウォームアップを無効化
         save_total_limit=2,
         max_grad_norm=MAX_GRAD_NORM,  # Gradient clipping
-        optim="paged_adamw_8bit" if USE_8BIT_ADAM else "adamw_torch",  # 8-bit Adam optimizer
+        optim="adamw_bnb_8bit" if USE_8BIT_ADAM else "adamw_torch",  # 8-bit Adam optimizer
     )
 
     # --- トレーナーのセットアップとトレーニング ---
@@ -329,10 +329,10 @@ def main():
     print(f"Evaluation interval: every {EVAL_STEPS} steps (~{EVAL_STEPS/steps_per_epoch:.2f} epochs)")
     print(f"Early stopping after {EARLY_STOPPING_PATIENCE} evaluations without improvement")
 
-    # カスタムデータコレクレーターを使用
+    # カスタムデータコレーターを使用
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, max_length=MAX_LEN)
 
-    # 早期停止・ベスト保存などのコールバック設定
+    # アーリーストッピングコールバックの設定
     callbacks = []
 
     # SaveBestMap3Callbackを追加
@@ -365,10 +365,25 @@ def main():
     print("Starting training...")
     trainer.train()
 
-    # --- 最終的なMAP@3スコアを表示 ---
-    print("\nEvaluating on validation set...")
-    eval_results = trainer.evaluate()
-    print(f"\nValidation MAP@3: {eval_results.get('eval_map@3', 'N/A'):.4f}")
+    # --- トレーニング終了後の最終評価 ---
+    print("\n" + "="*60)
+    print("トレーニング完了 - 最終評価を実行中...")
+    print("="*60)
+    final_eval_results = trainer.evaluate()
+    final_map3 = final_eval_results.get('eval_map@3', 0.0)
+    print(f"\n🏁 最終評価結果:")
+    print(f"   最終MAP@3スコア: {final_map3:.4f}")
+    print(f"   全体のベストMAP@3スコア: {save_best_callback.best_map3:.4f}")
+    
+    # 最終評価が新しいベストスコアの場合、明示的に保存
+    if final_map3 > save_best_callback.best_map3:
+        print(f"🎉 最終評価で新しいベストスコア達成！ {final_map3:.4f} > {save_best_callback.best_map3:.4f}")
+        save_best_callback.best_map3 = final_map3
+        best_map3_path = os.path.join(OUTPUT_DIR, 'best_map3')
+        os.makedirs(best_map3_path, exist_ok=True)
+        model.save_pretrained(best_map3_path)
+        tokenizer.save_pretrained(best_map3_path)
+        print(f"   最終ベストモデルを {best_map3_path} に保存しました")
 
     # --- モデルの保存 ---
     print("\nSaving model...")
