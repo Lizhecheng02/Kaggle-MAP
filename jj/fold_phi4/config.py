@@ -5,8 +5,8 @@ from typing import List, Optional
 @dataclass
 class Config:
     # Model configuration
-    VER: int = 2
-    MODEL_NAME: str = "Qwen/Qwen3-0.6B"
+    VER: int = 1
+    MODEL_NAME: str = "microsoft/phi-4"
 
     DEBUG: bool = False
     RANDOM_SEED: int = 42
