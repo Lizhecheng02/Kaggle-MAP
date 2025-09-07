@@ -23,7 +23,8 @@ except ImportError:
 
 # カスタムモジュールのインポート
 from config import *
-from utils import prepare_correct_answers, format_input, tokenize_dataset, create_submission, update_question_texts
+from utils import prepare_correct_answers, tokenize_dataset, create_submission
+from prompts import prompt_registry
 
 
 # Kaggle環境ではカスタムクラスは不要
@@ -78,8 +79,6 @@ def main():
     print("Loading test data...")
     # テストデータの読み込み
     test = pd.read_csv(TEST_DATA_PATH)
-    # QuestionText の一括更新（utilsに集約）
-    test = update_question_texts(test, context="submit")
 
     print("Loading training data for correct answers...")
     # 正解答案データの準備（訓練データから取得）
@@ -91,7 +90,11 @@ def main():
     # テストデータの前処理
     test = test.merge(correct, on=['QuestionId','MC_Answer'], how='left')
     test.is_correct = test.is_correct.fillna(0)
-    test['text'] = test.apply(format_input, axis=1)
+    
+    # プロンプト関数を設定から取得して使用
+    prompt_function = prompt_registry[PROMPT_VERSION]
+    print(f"Using prompt function: {PROMPT_VERSION}")
+    test['text'] = test.apply(lambda row: prompt_function(tokenizer, row), axis=1)
 
     print("Tokenizing test data...")
     # テストデータのトークナイズ
