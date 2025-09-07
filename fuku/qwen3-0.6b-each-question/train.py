@@ -176,7 +176,7 @@ def train_question_specific_model(question_id, train_data):
 
     # --- トークン長の分析 ---
     print("Analyzing token lengths...")
-    lengths = [len(tokenizer.encode(t, truncation=False)) for t in train['text']]
+    lengths = [len(tokenizer.encode(t, truncation=False)) for t in question_data['text']]
     plt.figure(figsize=(10, 6))
     plt.hist(lengths, bins=50)
     plt.title("Token Length Distribution")
