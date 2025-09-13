@@ -4,7 +4,7 @@
 
 # Model configuration
 VER = 2
-MODEL_NAME = "/kaggle/input/models/phi-4"
+MODEL_NAME = "/hdd/models/phi-4"
 MODEL_TYPE = "phi"  # Phi-4 model type
 EPOCHS = 3  # Reduce epochs for initial testing
 MAX_LEN = 250  # Phi-4 supports longer context
@@ -24,7 +24,10 @@ EVAL_STEPS = 229
 
 # Data paths
 TRAIN_DATA_PATH = '/kaggle/input/map-charting-student-math-misunderstandings/train.csv'
+# TRAIN_DATA_PATH = "/kaggle/input/map-charting-student-math-misunderstandings/train_ocr_corrected_openai.csv"
 TEST_DATA_PATH = '/kaggle/input/map-charting-student-math-misunderstandings/test.csv'
+OCR_CORRECTION_CSV_PATH = '/kaggle/input/map-charting-student-math-misunderstandings/ocr_spell_report_by_question.csv'
+
 
 # Model save paths
 BEST_MODEL_PATH = f"{OUTPUT_DIR}/best"
