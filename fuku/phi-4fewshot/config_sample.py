@@ -7,7 +7,7 @@ VER = 2
 MODEL_NAME = "/kaggle/input/models/phi-4"
 MODEL_TYPE = "phi"  # Phi-4 model type
 EPOCHS = 3  # Reduce epochs for initial testing
-MAX_LEN = 250  # Phi-4 supports longer context
+MAX_LEN = 400  # Phi-4 supports longer context
 
 # Directory settings
 OUTPUT_DIR = f"ver_{VER}"
@@ -24,6 +24,7 @@ EVAL_STEPS = 229
 
 # Data paths
 TRAIN_DATA_PATH = '/kaggle/input/map-charting-student-math-misunderstandings/train.csv'
+# TRAIN_DATA_PATH = "/kaggle/input/map-charting-student-math-misunderstandings/train_ocr_corrected_openai.csv"
 TEST_DATA_PATH = '/kaggle/input/map-charting-student-math-misunderstandings/test.csv'
 
 # Model save paths
@@ -68,3 +69,7 @@ MAX_GRAD_NORM = 1.0  # Gradient clipping value
 # "eager": 標準のPyTorch実装
 # "flash_attention_2": Flash Attention 2実装（高速・省メモリ）
 ATTENTION_IMPLEMENTATION = "eager"  # Options: "eager", "flash_attention_2"
+
+# Prompting settings
+# Few-shot例の件数（0で無効）
+FEWSHOT_K = 2
