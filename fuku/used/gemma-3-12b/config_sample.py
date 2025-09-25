@@ -1,28 +1,30 @@
 """
-設定ファイル - Deberta モデルのトレーニングと推論用設定
+設定ファイル - Gemma-3-12B-IT モデルのトレーニングと推論用設定
 """
 
 # Model configuration
 VER = 2
-MODEL_NAME = "/kaggle/input/gemma-3-12b"
-MODEL_TYPE = "qwen2"  # Add model type for proper handling
-EPOCHS = 5  # Reduce epochs for initial testing
-MAX_LEN = 512  # Increase max length for better context
+MODEL_NAME = "/hdd/models/gemma-3-12b-it"
+MODEL_TYPE = "gemma"  # Gemma-3-12B-IT model type
+EPOCHS = 3
+MAX_LEN = 512  # Gemma-3 supports long context
 
 # Directory settings
 OUTPUT_DIR = f"ver_{VER}"
 
 # Training parameters
-TRAIN_BATCH_SIZE = 4  # Further reduced to avoid CUDA errors
-EVAL_BATCH_SIZE = 8  # Further reduced to avoid CUDA errors
-GRADIENT_ACCUMULATION_STEPS=8
+TRAIN_BATCH_SIZE = 4
+EVAL_BATCH_SIZE = 4
+GRADIENT_ACCUMULATION_STEPS = 16
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 50
-SAVE_STEPS = 200
-EVAL_STEPS = 200
+SAVE_STEPS = 229
+EVAL_STEPS = 229
+
 
 # Data paths
 TRAIN_DATA_PATH = '/kaggle/input/map-charting-student-math-misunderstandings/train.csv'
+# TRAIN_DATA_PATH = "/kaggle/input/map-charting-student-math-misunderstandings/train_ocr_corrected_openai.csv"
 TEST_DATA_PATH = '/kaggle/input/map-charting-student-math-misunderstandings/test.csv'
 
 # Model save paths
@@ -41,18 +43,29 @@ SUBMISSION_OUTPUT_PATH = 'submission.csv'
 
 # WandB settings
 USE_WANDB = True  # Set to False to disable WandB
-WANDB_PROJECT = "gemma-3-12b-math-misconceptions"
-WANDB_RUN_NAME = f"gemma-3-12b-ver{VER}"
+WANDB_PROJECT = "gemma-3-12b-it-math-misconceptions"
+WANDB_RUN_NAME = f"gemma-3-12b-it-ver{VER}"
 WANDB_ENTITY = None  # Set your WandB entity (username or team name) if needed
 
 # Early stopping settings
 USE_EARLY_STOPPING = True
-EARLY_STOPPING_PATIENCE = 10  # Number of evaluations with no improvement after which training will be stopped
-EARLY_STOPPING_THRESHOLD = 0.001  # Minimum change in the monitored metric to qualify as an improvement
+EARLY_STOPPING_PATIENCE = 2  # 改善が見られない評価回数の上限（評価はEVAL_STEPSごとに実行される）
+EARLY_STOPPING_THRESHOLD = 0.001  # 改善とみなす最小変化量
 
-# LoRA configuration
-LORA_R = 16  # LoRAのランク
-LORA_ALPHA = 32  # LoRAのスケーリングパラメータ
-LORA_TARGET_MODULES = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  # Gemma用の対象モジュール
-LORA_DROPOUT = 0.1  # LoRAのドロップアウト率
-LORA_BIAS = "none"  # バイアスの設定
+# LoRA configuration for Gemma-3-12B-IT
+LORA_RANK = 16  # LoRAのランク
+LORA_ALPHA = 32  # LoRAのスケーリングパラメータ（rank と同程度）
+LORA_TARGET_MODULES = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+LORA_DROPOUT = 0.1
+LORA_BIAS = "none"  # biasの扱い: "none", "all", "lora_only"
+USE_DORA = False  # DoRA (Weight-Decomposed Low-Rank Adaptation) を使用する場合はTrue
+
+# Memory optimization settings
+USE_GRADIENT_CHECKPOINTING = True  # Enable gradient checkpointing
+USE_8BIT_ADAM = False  # Use 8-bit Adam optimizer for memory efficiency
+MAX_GRAD_NORM = 1.0  # Gradient clipping value
+
+# Attention implementation settings
+# "eager": 標準のPyTorch実装
+# "flash_attention_2": Flash Attention 2実装（高速・省メモリ）
+ATTENTION_IMPLEMENTATION = "eager"  # Options: "eager", "flash_attention_2"

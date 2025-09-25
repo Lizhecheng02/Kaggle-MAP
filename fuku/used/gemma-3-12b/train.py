@@ -1,5 +1,6 @@
 """
-Gemma-3-1B モデルトレーニングスクリプト
+LLM モデル（Gemma / Phi 等）による分類トレーニングスクリプト
+与えられた config の各種設定（LoRA, 早期終了, 8bit Optim, Attention 実装 等）に対応
 """
 
 import os
@@ -58,13 +59,21 @@ class SaveBestMap3Callback(TrainerCallback):
         return control
 
 
-class GemmaForSequenceClassification(nn.Module):
-    """Gemmaモデルを分類タスク用にカスタマイズ"""
-    def __init__(self, model_name, num_labels):
+class LLMForSequenceClassification(nn.Module):
+    """CausalLM ベースの LLM を分類タスク用にカスタマイズ"""
+    def __init__(self, model_name, num_labels, attn_implementation=None, torch_dtype=None):
         super().__init__()
         from transformers import AutoModelForCausalLM
-        self.gemma = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
-        self.config = self.gemma.config  # configをインスタンス変数として保持
+        base_kwargs = {
+            "trust_remote_code": True,
+        }
+        if attn_implementation is not None:
+            base_kwargs["attn_implementation"] = attn_implementation
+        if torch_dtype is not None:
+            base_kwargs["torch_dtype"] = torch_dtype
+
+        self.backbone = AutoModelForCausalLM.from_pretrained(model_name, **base_kwargs)
+        self.config = self.backbone.config  # configをインスタンス変数として保持
         self.dropout = nn.Dropout(0.1)
         # Gemma3の場合はtext_configからhidden_sizeを取得
         hidden_size = self.config.text_config.hidden_size if hasattr(self.config, 'text_config') else self.config.hidden_size
@@ -75,7 +84,7 @@ class GemmaForSequenceClassification(nn.Module):
         if input_ids is None and inputs_embeds is None:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
-        outputs = self.gemma(
+        outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
@@ -117,10 +126,14 @@ def main():
                 "learning_rate": LEARNING_RATE,
                 "early_stopping_patience": EARLY_STOPPING_PATIENCE if USE_EARLY_STOPPING else None,
                 "early_stopping_threshold": EARLY_STOPPING_THRESHOLD if USE_EARLY_STOPPING else None,
-                "lora_r": LORA_R,
+                "lora_r": (globals().get("LORA_R", globals().get("LORA_RANK", None))),
                 "lora_alpha": LORA_ALPHA,
                 "lora_dropout": LORA_DROPOUT,
                 "lora_target_modules": LORA_TARGET_MODULES,
+                "use_dora": globals().get("USE_DORA", False),
+                "attn_implementation": globals().get("ATTENTION_IMPLEMENTATION", None),
+                "use_8bit_adam": globals().get("USE_8BIT_ADAM", False),
+                "max_grad_norm": globals().get("MAX_GRAD_NORM", None),
             }
         )
 
@@ -198,50 +211,100 @@ def main():
 
     # --- モデルの初期化 ---
     print("Initializing model...")
+    # attention implementation / dtype 設定
+    attn_impl = globals().get("ATTENTION_IMPLEMENTATION", None)
+    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
+    base_model_kwargs = {
+        "trust_remote_code": True,
+        "device_map": None,
+        "torch_dtype": dtype,
+    }
+    if attn_impl:
+        base_model_kwargs["attn_implementation"] = attn_impl
     try:
         # Gemmaモデルの分類モデルを読み込む
         model = AutoModelForSequenceClassification.from_pretrained(
             MODEL_NAME,
             num_labels=n_classes,
-            trust_remote_code=True,
-            device_map=None,  # デバイスマッピングを無効化
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
+            **base_model_kwargs,
         )
         # パディングトークンIDを設定
         model.config.pad_token_id = tokenizer.pad_token_id
     except:
-        # 失敗した場合はカスタムクラスを使用
-        print("Using custom classification head for Gemma...")
-        # ベースモデルを読み込む（Gemmaの場合はCausalLMモデルを使用）
-        base_model = AutoModelForCausalLM.from_pretrained(
+        # 失敗した場合はCausalLMベースのカスタムクラスを使用
+        print("Falling back to custom classification head over CausalLM...")
+        model = LLMForSequenceClassification(
             MODEL_NAME,
-            trust_remote_code=True,
-            device_map=None,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
+            n_classes,
+            attn_implementation=attn_impl,
+            torch_dtype=dtype,
         )
-        # カスタム分類ヘッドを作成
-        model = GemmaForSequenceClassification(MODEL_NAME, n_classes)
-        model.gemma = base_model
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
-    lora_config = LoraConfig(
-        r=LORA_R,  # LoRAのランク
-        lora_alpha=LORA_ALPHA,  # LoRAのスケーリングパラメータ
-        target_modules=LORA_TARGET_MODULES,  # Gemma用の対象モジュール
-        lora_dropout=LORA_DROPOUT,
-        bias=LORA_BIAS,
-        task_type=TaskType.SEQ_CLS,
-    )
+    # LORA_R と LORA_RANK の両方に対応
+    LORA_R_EFFECTIVE = globals().get("LORA_R", globals().get("LORA_RANK", 16))
+    try:
+        lora_config = LoraConfig(
+            r=LORA_R_EFFECTIVE,
+            lora_alpha=LORA_ALPHA,
+            target_modules=LORA_TARGET_MODULES,
+            lora_dropout=LORA_DROPOUT,
+            bias=LORA_BIAS,
+            task_type=TaskType.SEQ_CLS,
+            use_dora=globals().get("USE_DORA", False),
+        )
+    except TypeError:
+        # 古い peft で use_dora 未対応の場合
+        lora_config = LoraConfig(
+            r=LORA_R_EFFECTIVE,
+            lora_alpha=LORA_ALPHA,
+            target_modules=LORA_TARGET_MODULES,
+            lora_dropout=LORA_DROPOUT,
+            bias=LORA_BIAS,
+            task_type=TaskType.SEQ_CLS,
+        )
 
     # PEFTモデルの作成
     model = get_peft_model(model, lora_config)
     print("Number of trainable parameters:")
     model.print_trainable_parameters()
 
+    # Gradient checkpointing note:
+    # When using LoRA with gradient checkpointing, PyTorch may warn that
+    # "None of the inputs have requires_grad=True" if inputs are not set to
+    # require grads. Enabling input requires grad avoids the warning and ensures
+    # correct checkpoint behavior with frozen base weights.
+    if globals().get("USE_GRADIENT_CHECKPOINTING", False):
+        try:
+            # Ensure model inputs require grad so checkpoint sees a grad path
+            model.enable_input_require_grads()
+            print("Enabled input requires grad for gradient checkpointing.")
+        except Exception as e:
+            print(f"Could not enable input requires grads: {e}")
+        # Prefer non-reentrant checkpointing when available to reduce issues
+        try:
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            print("Enabled gradient checkpointing with use_reentrant=False.")
+        except TypeError:
+            # Older Transformers versions don't support kwargs
+            try:
+                model.gradient_checkpointing_enable()
+                print("Enabled gradient checkpointing.")
+            except Exception as e:
+                print(f"Could not enable gradient checkpointing on model: {e}")
+
     # シングルGPUに設定
     if torch.cuda.is_available():
         model = model.cuda()
+
+    # --- Optimizer 選択（8bit Adam に対応） ---
+    import importlib.util as _importlib_util
+    _bnb_spec = _importlib_util.find_spec("bitsandbytes")
+    _use_8bit = bool(globals().get("USE_8BIT_ADAM", False) and _bnb_spec is not None)
+    if globals().get("USE_8BIT_ADAM", False) and _bnb_spec is None:
+        print("bitsandbytes not found; falling back to adamw_torch instead of 8-bit Adam.")
 
     # --- トレーニング引数の設定 ---
     training_args = TrainingArguments(
@@ -263,12 +326,14 @@ def main():
         greater_is_better=True,
         load_best_model_at_end=True,
         report_to="wandb" if USE_WANDB else "none",
-        bf16=True,  # RTX 5090の互換性問題のため一時的にFalse
-        gradient_checkpointing=False,  # インデックスエラーのため一時的に無効化
+        bf16=torch.cuda.is_available(),
+        gradient_checkpointing=globals().get("USE_GRADIENT_CHECKPOINTING", False),
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない
         lr_scheduler_type="cosine",  # コサインスケジューラーを使用
         warmup_ratio=0.0,  # ウォームアップを無効化
+        optim=("adamw_bnb_8bit" if _use_8bit else "adamw_torch"),
+        max_grad_norm=globals().get("MAX_GRAD_NORM", 1.0),
     )
 
     # --- トレーナーのセットアップとトレーニング ---

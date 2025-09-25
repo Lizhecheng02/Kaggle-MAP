@@ -22,35 +22,52 @@ def prepare_correct_answers(train_data):
 
 def format_input(row):
     """入力データをモデル用プロンプトにフォーマット"""
-    if row['is_correct']:
-        status = "This answer is correct."
-    else:
-        status = "This answer is incorrect."
 
-    # 選択肢となる誤概念リストを定義
-    misconceptions = [
-        'Adding_across', 'Adding_terms', 'Additive', 'Base_rate', 'Certainty', 'Definition',
-        'Denominator-only_change', 'Division', 'Duplication', 'Firstterm', 'FlipChange',
-        'Ignores_zeroes', 'Incomplete', 'Incorrect_equivalent_fraction_addition', 'Interior',
-        'Inverse_operation', 'Inversion', 'Irrelevant', 'Longer_is_bigger', 'Mult',
-        'Multiplying_by_4', 'NA', 'Not_variable', 'Positive', 'Scale', 'Shorter_is_bigger',
-        'Subtraction', 'SwapDividend', 'Tacking', 'Unknowable', 'WNB', 'Whole_numbers_larger',
-        'Wrong_Fraction', 'Wrong_Operation', 'Wrong_fraction', 'Wrong_term'
-    ]
-    # リストをカンマ区切りの文字列に変換
-    choices = ", ".join(misconceptions)
+    # if row['is_correct']:
+    #     status = "This answer is correct."
+    # else:
+    #     status = "This answer is incorrect."
+
+    # # 選択肢となる誤概念リストを定義
+    # misconceptions = [
+    #     'Adding_across', 'Adding_terms', 'Additive', 'Base_rate', 'Certainty', 'Definition',
+    #     'Denominator-only_change', 'Division', 'Duplication', 'Firstterm', 'FlipChange',
+    #     'Ignores_zeroes', 'Incomplete', 'Incorrect_equivalent_fraction_addition', 'Interior',
+    #     'Inverse_operation', 'Inversion', 'Irrelevant', 'Longer_is_bigger', 'Mult',
+    #     'Multiplying_by_4', 'NA', 'Not_variable', 'Positive', 'Scale', 'Shorter_is_bigger',
+    #     'Subtraction', 'SwapDividend', 'Tacking', 'Unknowable', 'WNB', 'Whole_numbers_larger',
+    #     'Wrong_Fraction', 'Wrong_Operation', 'Wrong_fraction', 'Wrong_term'
+    # ]
+    # # リストをカンマ区切りの文字列に変換
+    # choices = ", ".join(misconceptions)
+    # # Gemma-3用のプロンプトフォーマット（選択肢を含む）
+    # prompt = (
+    #     f"<bos><start_of_turn>user\n"
+    #     f"[Mathematical Misconception Analysis Task]\n\n"
+    #     f"Question: {row['QuestionText']}\n"
+    #     f"Student's Answer: {row['MC_Answer']}\n"
+    #     f"Status: {status}\n"
+    #     f"Student's Explanation: {row['StudentExplanation']}\n\n"
+    #     f"Misconception choices: {choices}\n\n"
+    #     f"Task: Identify the mathematical misconception in this student's reasoning from the above list."
+    #     f"<end_of_turn>\n"
+    #     f"<start_of_turn>model\n"
+    # )
+    if row['is_correct']:
+        status = "Yes."
+    else:
+        status = "No."
+
     # Gemma-3用のプロンプトフォーマット（選択肢を含む）
     prompt = (
         f"<bos><start_of_turn>user\n"
         f"[Mathematical Misconception Analysis Task]\n\n"
         f"Question: {row['QuestionText']}\n"
-        f"Student's Answer: {row['MC_Answer']}\n"
-        f"Status: {status}\n"
-        f"Student's Explanation: {row['StudentExplanation']}\n\n"
-        f"Misconception choices: {choices}\n\n"
-        f"Task: Identify the mathematical misconception in this student's reasoning from the above list."
+        f"Answer: {row['MC_Answer']}\n"
+        f"Correct?: {status}\n"
+        f"Explanation: {row['StudentExplanation']}\n"
         f"<end_of_turn>\n"
-        f"<start_of_turn>model\n"
+        f"<start_of_turn>\n"
     )
     return prompt
 
