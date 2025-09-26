@@ -53,12 +53,22 @@ def load_model_and_tokenizer(n_classes: int):
         base_model_kwargs["attn_implementation"] = attn_impl
 
     # 分類モデル
-    model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_NAME,
-        num_labels=n_classes,
-        **base_model_kwargs,
-    )
-    model.config.pad_token_id = tokenizer.pad_token_id
+    if (globals().get("MODEL_TYPE", "").lower() == "gemma") or ("gemma" in str(MODEL_NAME).lower()):
+        # 学習時と同様に、CausalLM+線形ヘッドのカスタム分類器を使う
+        from train import LLMForSequenceClassification  # 再利用
+        model = LLMForSequenceClassification(
+            MODEL_NAME,
+            n_classes,
+            attn_implementation=attn_impl,
+            torch_dtype=dtype,
+        )
+    else:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            MODEL_NAME,
+            num_labels=n_classes,
+            **base_model_kwargs,
+        )
+        model.config.pad_token_id = tokenizer.pad_token_id
 
     # LoRA アダプター
     if PEFT_AVAILABLE and os.path.isdir(BEST_MODEL_PATH):
@@ -126,4 +136,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -107,6 +107,29 @@ class LLMForSequenceClassification(nn.Module):
         else:
             return {'logits': logits}
 
+    # Forward gradient-checkpointing-related calls to the backbone when available
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+        if hasattr(self.backbone, 'gradient_checkpointing_enable'):
+            try:
+                if gradient_checkpointing_kwargs is not None:
+                    self.backbone.gradient_checkpointing_enable(**gradient_checkpointing_kwargs)
+                else:
+                    self.backbone.gradient_checkpointing_enable()
+            except TypeError:
+                # Older Transformers don't accept kwargs
+                self.backbone.gradient_checkpointing_enable()
+
+    def gradient_checkpointing_disable(self):
+        if hasattr(self.backbone, 'gradient_checkpointing_disable'):
+            self.backbone.gradient_checkpointing_disable()
+
+    def enable_input_require_grads(self):
+        if hasattr(self.backbone, 'enable_input_require_grads'):
+            try:
+                self.backbone.enable_input_require_grads()
+            except Exception:
+                pass
+
 
 def main():
     """メイントレーニング関数"""
@@ -222,8 +245,18 @@ def main():
     }
     if attn_impl:
         base_model_kwargs["attn_implementation"] = attn_impl
-    try:
-        # Gemmaモデルの分類モデルを読み込む
+
+    # Gemma系チェックポイントではAutoModelForSequenceClassificationで
+    # 本体重みが初期化されてしまう事例があるため、CausalLM+分類ヘッドを明示使用
+    if (globals().get("MODEL_TYPE", "").lower() == "gemma") or ("gemma" in str(MODEL_NAME).lower()):
+        print("Using custom LLMForSequenceClassification backbone (CausalLM + linear head) for Gemma.")
+        model = LLMForSequenceClassification(
+            MODEL_NAME,
+            n_classes,
+            attn_implementation=attn_impl,
+            torch_dtype=dtype,
+        )
+    else:
         model = AutoModelForSequenceClassification.from_pretrained(
             MODEL_NAME,
             num_labels=n_classes,
@@ -231,15 +264,6 @@ def main():
         )
         # パディングトークンIDを設定
         model.config.pad_token_id = tokenizer.pad_token_id
-    except:
-        # 失敗した場合はCausalLMベースのカスタムクラスを使用
-        print("Falling back to custom classification head over CausalLM...")
-        model = LLMForSequenceClassification(
-            MODEL_NAME,
-            n_classes,
-            attn_implementation=attn_impl,
-            torch_dtype=dtype,
-        )
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
@@ -277,23 +301,39 @@ def main():
     # require grads. Enabling input requires grad avoids the warning and ensures
     # correct checkpoint behavior with frozen base weights.
     if globals().get("USE_GRADIENT_CHECKPOINTING", False):
+        # Ensure model inputs require grad so checkpoint sees a grad path
         try:
-            # Ensure model inputs require grad so checkpoint sees a grad path
             model.enable_input_require_grads()
             print("Enabled input requires grad for gradient checkpointing.")
         except Exception as e:
             print(f"Could not enable input requires grads: {e}")
-        # Prefer non-reentrant checkpointing when available to reduce issues
+        # Prefer non-reentrant checkpointing when available; fall back gracefully
         try:
-            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            if hasattr(model, 'gradient_checkpointing_enable'):
+                model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            else:
+                # Try forwarding to inner backbone if exposed
+                base = getattr(model, 'base_model', None)
+                target = base if base is not None else model
+                if hasattr(target, 'gradient_checkpointing_enable'):
+                    target.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+                else:
+                    print("Gradient checkpointing not supported on this model; skipping.")
             print("Enabled gradient checkpointing with use_reentrant=False.")
-        except TypeError:
-            # Older Transformers versions don't support kwargs
+        except Exception as e:
             try:
-                model.gradient_checkpointing_enable()
+                if hasattr(model, 'gradient_checkpointing_enable'):
+                    model.gradient_checkpointing_enable()
+                else:
+                    base = getattr(model, 'base_model', None)
+                    target = base if base is not None else model
+                    if hasattr(target, 'gradient_checkpointing_enable'):
+                        target.gradient_checkpointing_enable()
+                    else:
+                        raise e
                 print("Enabled gradient checkpointing.")
-            except Exception as e:
-                print(f"Could not enable gradient checkpointing on model: {e}")
+            except Exception as e2:
+                print(f"Could not enable gradient checkpointing on model: {e2}")
 
     # シングルGPUに設定
     if torch.cuda.is_available():
