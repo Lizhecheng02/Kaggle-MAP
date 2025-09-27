@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from transformers import (
-    AutoModelForSequenceClassification,
     AutoTokenizer,
     TrainingArguments,
     Trainer,
@@ -21,7 +20,7 @@ import joblib
 import torch
 import torch.nn as nn
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
-from transformers import AutoModel, AutoModelForCausalLM
+from transformers import AutoModel
 import wandb
 from transformers import EarlyStoppingCallback, TrainerCallback
 
@@ -60,10 +59,10 @@ class SaveBestMap3Callback(TrainerCallback):
 
 
 class LLMForSequenceClassification(nn.Module):
-    """CausalLM ベースの LLM を分類タスク用にカスタマイズ"""
+    """Gemma3ForCausalLM をバックボーンにした分類器（線形分類ヘッド付き）"""
     def __init__(self, model_name, num_labels, attn_implementation=None, torch_dtype=None):
         super().__init__()
-        from transformers import AutoModelForCausalLM
+        from transformers import Gemma3ForCausalLM
         base_kwargs = {
             "trust_remote_code": True,
         }
@@ -72,7 +71,8 @@ class LLMForSequenceClassification(nn.Module):
         if torch_dtype is not None:
             base_kwargs["torch_dtype"] = torch_dtype
 
-        self.backbone = AutoModelForCausalLM.from_pretrained(model_name, **base_kwargs)
+        # Gemma3 の CausalLM 本体
+        self.backbone = Gemma3ForCausalLM.from_pretrained(model_name, **base_kwargs)
         self.config = self.backbone.config  # configをインスタンス変数として保持
         self.dropout = nn.Dropout(0.1)
         # Gemma3の場合はtext_configからhidden_sizeを取得
@@ -246,24 +246,19 @@ def main():
     if attn_impl:
         base_model_kwargs["attn_implementation"] = attn_impl
 
-    # Gemma系チェックポイントではAutoModelForSequenceClassificationで
-    # 本体重みが初期化されてしまう事例があるため、CausalLM+分類ヘッドを明示使用
-    if (globals().get("MODEL_TYPE", "").lower() == "gemma") or ("gemma" in str(MODEL_NAME).lower()):
-        print("Using custom LLMForSequenceClassification backbone (CausalLM + linear head) for Gemma.")
-        model = LLMForSequenceClassification(
-            MODEL_NAME,
-            n_classes,
-            attn_implementation=attn_impl,
-            torch_dtype=dtype,
-        )
-    else:
-        model = AutoModelForSequenceClassification.from_pretrained(
-            MODEL_NAME,
-            num_labels=n_classes,
-            **base_model_kwargs,
-        )
-        # パディングトークンIDを設定
+    # AutoModelForSequenceClassification の代わりに Gemma3ForCausalLM + 線形分類ヘッダを使用
+    print("Using Gemma3ForCausalLM backbone with linear classification head.")
+    model = LLMForSequenceClassification(
+        MODEL_NAME,
+        n_classes,
+        attn_implementation=attn_impl,
+        torch_dtype=dtype,
+    )
+    # パディングトークンIDを設定（必要な場合）
+    try:
         model.config.pad_token_id = tokenizer.pad_token_id
+    except Exception:
+        pass
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
