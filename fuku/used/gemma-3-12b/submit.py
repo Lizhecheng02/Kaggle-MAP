@@ -12,7 +12,7 @@ import torch
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoTokenizer
 
 # プロジェクト設定・ユーティリティ
 from config import *
@@ -52,23 +52,18 @@ def load_model_and_tokenizer(n_classes: int):
     if attn_impl:
         base_model_kwargs["attn_implementation"] = attn_impl
 
-    # 分類モデル
-    if (globals().get("MODEL_TYPE", "").lower() == "gemma") or ("gemma" in str(MODEL_NAME).lower()):
-        # 学習時と同様に、CausalLM+線形ヘッドのカスタム分類器を使う
-        from train import LLMForSequenceClassification  # 再利用
-        model = LLMForSequenceClassification(
-            MODEL_NAME,
-            n_classes,
-            attn_implementation=attn_impl,
-            torch_dtype=dtype,
-        )
-    else:
-        model = AutoModelForSequenceClassification.from_pretrained(
-            MODEL_NAME,
-            num_labels=n_classes,
-            **base_model_kwargs,
-        )
+    # 分類モデル: Gemma3ForCausalLM + 線形分類ヘッド（学習時と同様）
+    from train import LLMForSequenceClassification  # 再利用
+    model = LLMForSequenceClassification(
+        MODEL_NAME,
+        n_classes,
+        attn_implementation=attn_impl,
+        torch_dtype=dtype,
+    )
+    try:
         model.config.pad_token_id = tokenizer.pad_token_id
+    except Exception:
+        pass
 
     # LoRA アダプター
     if PEFT_AVAILABLE and os.path.isdir(BEST_MODEL_PATH):
