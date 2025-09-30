@@ -19,32 +19,18 @@ class DataCollatorWithPadding:
     pad_to_multiple_of: int = None
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        # バッチの最大長を取得
-        max_length = max(len(feature["input_ids"]) for feature in features)
-        
-        # パディング
-        batch = {}
-        for key in features[0].keys():
-            if key == "label":
-                # ラベルはパディング不要
-                batch[key] = torch.tensor([f[key] for f in features], dtype=torch.long)
-            elif key in ["input_ids", "attention_mask"]:
-                # input_idsとattention_maskをパディング
-                padded = []
-                for feature in features:
-                    # tensorをlistに変換
-                    if torch.is_tensor(feature[key]):
-                        feature_list = feature[key].tolist()
-                    else:
-                        feature_list = feature[key]
-                    
-                    remainder = [self.tokenizer.pad_token_id if key == "input_ids" else 0] * (max_length - len(feature_list))
-                    padded_feature = feature_list + remainder
-                    padded.append(padded_feature)
-                batch[key] = torch.tensor(padded, dtype=torch.long)
-        
-        # labelsフィールドを追加（Trainerが期待するため）
-        if "label" in batch:
-            batch["labels"] = batch.pop("label")  # labelを削除してlabelsに変更
-            
+        labels = None
+        if "label" in features[0]:
+            labels = torch.tensor([f["label"] for f in features], dtype=torch.long)
+            features = [{k: v for k, v in f.items() if k != "label"} for f in features]
+
+        batch = self.tokenizer.pad(
+            features,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors="pt",
+        )
+        if labels is not None:
+            batch["labels"] = labels
         return batch

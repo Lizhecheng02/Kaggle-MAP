@@ -225,20 +225,24 @@ def main():
         # 標準的なGPTモデルではeos_tokenをパディングトークンとして使用
         tokenizer.pad_token = tokenizer.eos_token
 
-    # --- トークン長の分析 ---
-    print("Analyzing token lengths...")
-    lengths = [len(tokenizer.encode(t, truncation=False)) for t in train['text']]
-    plt.figure(figsize=(10, 6))
-    plt.hist(lengths, bins=50)
-    plt.title("Token Length Distribution")
-    plt.xlabel("Number of tokens")
-    plt.ylabel("Frequency")
-    plt.grid(True)
-    plt.savefig(f'{OUTPUT_DIR}/token_length_distribution.png')
-    plt.close()
+    # --- トークン長の分析（任意） ---
+    if ANALYZE_TOKEN_LENGTHS:
+        print("Analyzing token lengths (sampled)...")
+        sample_texts = train['text']
+        if ANALYZE_SAMPLE_SIZE and ANALYZE_SAMPLE_SIZE > 0:
+            sample_texts = sample_texts.sample(n=min(ANALYZE_SAMPLE_SIZE, len(sample_texts)), random_state=RANDOM_SEED)
+        lengths = [len(tokenizer.encode(t, truncation=False)) for t in sample_texts]
+        plt.figure(figsize=(10, 6))
+        plt.hist(lengths, bins=50)
+        plt.title("Token Length Distribution (sample)")
+        plt.xlabel("Number of tokens")
+        plt.ylabel("Frequency")
+        plt.grid(True)
+        plt.savefig(f'{OUTPUT_DIR}/token_length_distribution.png')
+        plt.close()
 
-    over_limit = (np.array(lengths) > MAX_LEN).sum()
-    print(f"There are {over_limit} train sample(s) with more than {MAX_LEN} tokens")
+        over_limit = (np.array(lengths) > MAX_LEN).sum()
+        print(f"There are {over_limit} sampled train sample(s) with more than {MAX_LEN} tokens")
 
     # --- データの分割 ---
     print("Splitting data into train and validation sets...")
@@ -352,6 +356,7 @@ def main():
         save_total_limit=2,
         max_grad_norm=MAX_GRAD_NORM,  # Gradient clipping
         optim="adamw_bnb_8bit" if USE_8BIT_ADAM else "adamw_torch",  # 8-bit Adam optimizer
+        dataloader_num_workers=DATALOADER_NUM_WORKERS,
     )
 
     # --- トレーナーのセットアップとトレーニング ---

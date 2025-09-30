@@ -7,6 +7,7 @@ import numpy as np
 from transformers import AutoTokenizer
 from datasets import Dataset
 import torch
+from config import TOKENIZE_NUM_PROC
 
 
 def prepare_correct_answers(train_data):
@@ -50,7 +51,7 @@ def tokenize_dataset(dataset, tokenizer, max_len):
             return_tensors=None  # map時は'None'を使用
         )
 
-    dataset = dataset.map(tokenize, batched=True, batch_size=100)
+    dataset = dataset.map(tokenize, batched=True, batch_size=100, num_proc=TOKENIZE_NUM_PROC)
     # columnsの設定時にlabelを保持
     columns = ['input_ids', 'attention_mask', 'label'] if 'label' in dataset.column_names else ['input_ids', 'attention_mask']
     dataset.set_format(type='torch', columns=columns)
