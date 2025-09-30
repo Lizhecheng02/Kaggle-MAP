@@ -81,6 +81,70 @@ class GPTForSequenceClassification(nn.Module):
         return type('Output', (), {'loss': loss, 'logits': logits})()
 
 
+
+def _resolve_lora_target_modules(model, configured_targets):
+    """
+    Determine appropriate LoRA target module names for the given model.
+
+    - If `configured_targets` is a non-empty list, verify they exist; if none
+      match, fall back to automatic detection.
+    - If `configured_targets` is 'auto' or empty/None, automatically detect.
+    """
+    def any_target_matches(targets):
+        hits = set()
+        all_names = [n for n, _ in model.named_modules()]
+        for t in targets or []:
+            for n in all_names:
+                if n.endswith(t) or (t in n.split('.')):
+                    hits.add(t)
+                    break
+        return list(hits)
+
+    # 1) If user specified targets, validate
+    if isinstance(configured_targets, (list, tuple)) and len(configured_targets) > 0:
+        hits = any_target_matches(configured_targets)
+        if len(hits) > 0:
+            print(f"LoRA target modules (validated from config): {hits}")
+            return hits
+        else:
+            print("Warning: Configured LORA_TARGET_MODULES did not match any modules. Falling back to auto-detection.")
+
+    # 2) Auto-detect based on common GPT architectures
+    # Collect suffix names of Linear and GPT-2 Conv1D projection layers
+    suffixes = []
+    for name, module in model.named_modules():
+        cls = type(module).__name__
+        if cls in ("Linear", "Conv1D"):
+            suffixes.append(name.split('.')[-1])
+    # de-duplicate while preserving order
+    seen = set()
+    uniq_suffixes = []
+    for s in suffixes:
+        if s not in seen:
+            seen.add(s)
+            uniq_suffixes.append(s)
+
+    # Prefer common GPT names if present
+    common_gpt_names = [
+        # LLaMA/NeoX style
+        "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+        # GPT-2 style
+        "c_attn", "c_proj", "c_fc",
+    ]
+    detected = [n for n in common_gpt_names if n in uniq_suffixes]
+
+    # Fallback: use all linear-like suffixes, excluding obvious heads
+    if not detected:
+        exclude = {"lm_head", "classifier", "score"}
+        detected = [n for n in uniq_suffixes if n not in exclude]
+
+    # Final safety: ensure non-empty
+    if not detected:
+        # As an ultimate fallback, try to adapt the classifier only to avoid empty set
+        detected = ["classifier"]
+
+    print(f"LoRA target modules (auto-detected): {detected}")
+    return detected
 def main():
     """メイントレーニング関数"""
 
@@ -225,10 +289,11 @@ def main():
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
+    resolved_targets = _resolve_lora_target_modules(model, LORA_TARGET_MODULES)
     lora_config = LoraConfig(
         r=LORA_RANK,  # LoRAのランク
         lora_alpha=LORA_ALPHA,  # LoRAのスケーリングパラメータ
-        target_modules=LORA_TARGET_MODULES,  # 対象モジュール
+        target_modules=resolved_targets,  # 対象モジュール
         lora_dropout=LORA_DROPOUT,
         bias=LORA_BIAS,
         task_type=TaskType.SEQ_CLS,
