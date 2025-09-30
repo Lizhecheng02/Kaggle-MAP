@@ -1,6 +1,6 @@
 import os, shutil, warnings
 from pathlib import Path
-from collections import Counter
+from collections import Counter, OrderedDict
 
 import numpy as np
 import argparse
@@ -70,13 +70,15 @@ def load_and_preprocess_data():
     # Store full label for evaluation
     train['full_target'] = train['Category'] + ":" + train['Misconception']
     
-    # Train only on suffix (remove True_/False_)
-    train['misconception_target'] = (
-        train['Category'].str.split("_", n=1).str[-1] + ":" + train['Misconception']
-    )
+    # Question Specific Label for Correct:NA
+    def qid_specific(x):
+        if x['full_target'] == "True_Correct:NA":
+            return str(x["QuestionId"]) + "|" + x['full_target']
+        return x['full_target']
+    train['full_target_QID'] = train.apply(lambda x: qid_specific(x), axis=1)
 
     le = LabelEncoder()
-    train['label'] = le.fit_transform(train['misconception_target'])
+    train['label'] = le.fit_transform(train['full_target_QID'])
 
     if "is_correct" in train.columns:
         train = train.drop(columns = "is_correct")
@@ -98,7 +100,16 @@ def load_and_preprocess_data():
     
     train = train.merge(answers, on="QuestionId", how="left")
 
-    train["split_key"] = (train['QuestionId'].astype(str) + "_" + train['label'].astype(str)).astype('category').cat.codes
+    def make_split_key(row, le):
+        decoded = le.inverse_transform([row["label"]])[0]
+        if "True_Correct:NA" in decoded:
+            return str(row["label"])
+        else:
+            return f"{row['QuestionId']}_{row['label']}"
+    
+    train["split_key"] = train.apply(lambda r: make_split_key(r, le), axis=1)
+    train["split_key"] = train["split_key"].astype("category").cat.codes
+
     return train, le
 
 
@@ -174,20 +185,22 @@ def make_compute_map3(eval_df, le):
     def compute_map3(eval_pred):
         logits, labels = eval_pred
         probs = torch.nn.functional.softmax(torch.tensor(logits), dim=-1).numpy()
-        top3 = np.argsort(-probs, axis=1)[:, :3]
+        top3 = np.argsort(-probs, axis=1)[:, :]
 
         # Decode predictions
         pred_misconceptions = le.inverse_transform(top3.ravel())
+        # Remove QuestionID from Correct:NA label
+        def remove_qid(x):
+            if "True_Correct:NA" in x:
+                return x.split("|")[-1]
+            return x
+
+        pred_misconceptions = np.array([ remove_qid(tmp) for tmp in pred_misconceptions ])
         pred_misconceptions = pred_misconceptions.reshape(top3.shape)
-
-        # Add True_/False_ prefix
-        prefix = np.where(is_correct, "True_", "False_")
-        # pred_full = np.char.add(prefix[:, None], pred_misconceptions) # it gives bug when environment numpy version is low
-        pred_full = np.array([[ (p + m) for m in row ] for p, row in zip(prefix, pred_misconceptions)])
-
+        pred_misconceptions = [list(OrderedDict.fromkeys(map(str, row)))[:3] for row in pred_misconceptions.tolist()] # remove duplicate Correct:NA, keep only first
 
         # Compare
-        match = (pred_full == gold_full[:, None])
+        match = (pred_misconceptions == gold_full[:, None])
         map3 = np.mean([
             1 if m[0] else 0.5 if m[1] else 1/3 if m[2] else 0
             for m in match
@@ -196,6 +209,7 @@ def make_compute_map3(eval_df, le):
         return {"map@3": map3}
 
     return compute_map3
+
 
 class TxtLoggerCallback(TrainerCallback):
     def __init__(self, save_path, do_full_train=False):
@@ -242,11 +256,12 @@ class TxtLoggerCallback(TrainerCallback):
                 f.flush()
             self.last_written_step = step
             
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ver", type=int, required=True, help="Version number (e.g. 54)")
     parser.add_argument("--model_name", type=str, required=True, help="Model name (e.g. Qwen/Qwen3-8B)")
-    parser.add_argument("--max_len", type=int, default=300)
+    parser.add_argument("--max_len", type=int, default=256)
     parser.add_argument("--use_single_fold", action="store_true")
     parser.add_argument("--cv_fold", type=int, default=5)
     parser.add_argument("--cv_seed", type=int, default=42)
@@ -267,7 +282,7 @@ def main():
     MODEL_NAME = args.model_name
     MAX_LEN = args.max_len
     DO_FULL_TRAIN = args.full_train
-
+    
     print(args)
 
     # Load tokenizer
@@ -299,7 +314,6 @@ def main():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-        
         tr, va = train_df.iloc[tr_idx].copy(), train_df.iloc[va_idx].copy()
         if DO_FULL_TRAIN:
             tr = train_df.copy()
@@ -309,12 +323,11 @@ def main():
         n_classes_va_fold = tr['label'].nunique()
         print(f"Fold {fold}: train classes = {n_classes_tr_fold}, val classes = {n_classes_va_fold}, total = {n_classes}")
 
-        # Ensure train fold covers *all* classes
-        if n_classes_tr_fold != n_classes:
-            raise AssertionError(
-                f"Train fold missing classes! Found {n_classes_tr_fold}, expected {n_classes}"
-            )
-
+        # # Ensure train fold covers *all* classes
+        # if n_classes_tr_fold != n_classes:
+        #     raise AssertionError(
+        #         f"Train fold missing classes! Found {n_classes_tr_fold}, expected {n_classes}"
+        #     )
         
         ds_tr = prepare_dataset(tr, tokenizer, MAX_LEN=MAX_LEN)
         if DO_FULL_TRAIN:
@@ -342,10 +355,10 @@ def main():
         output_fold_dir = f"{DIR}/fold_{fold}"
         os.makedirs(output_fold_dir, exist_ok=True)
 
-        if DO_FULL_TRAIN:
-            compute_metrics = None
-        else:
+        if not DO_FULL_TRAIN:
             compute_metrics = make_compute_map3(va, le)
+        else:
+            compute_metrics = None
 
         training_args = TrainingArguments(
             output_dir=output_fold_dir,
@@ -381,7 +394,7 @@ def main():
             eval_dataset=ds_va,
             data_collator=data_collator,
             compute_metrics=compute_metrics,
-            callbacks=[TxtLoggerCallback(results_path, do_full_train=DO_FULL_TRAIN)],
+            callbacks=[TxtLoggerCallback(results_path, do_full_train = DO_FULL_TRAIN)],
         )
 
         trainer.train()
