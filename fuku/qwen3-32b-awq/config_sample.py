@@ -6,16 +6,16 @@
 VER = "awq"
 MODEL_NAME = "/hdd/models/Qwen3-32B-AWQ"
 MODEL_TYPE = "qwen3"  # Qwen3 model type for AWQ
-EPOCHS = 3  # Reduce epochs for initial testing
+EPOCHS = 2  # Reduce epochs for initial testing
 MAX_LEN = 300  # Increase max length for better context
 
 # Directory settings
 OUTPUT_DIR = f"ver_{VER}"
 
 # Training parameters
-TRAIN_BATCH_SIZE = 2  # AWQモデルはより大きなバッチサイズが可能
-EVAL_BATCH_SIZE = 4   # 推論時のバッチサイズ
-GRADIENT_ACCUMULATION_STEPS = 16  # AWQで効率的な勾配蓄積
+TRAIN_BATCH_SIZE = 8  # AWQモデルはより大きなバッチサイズが可能
+EVAL_BATCH_SIZE = 8   # 推論時のバッチサイズ
+GRADIENT_ACCUMULATION_STEPS = 8  # AWQで効率的な勾配蓄積
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 50
 SAVE_STEPS = 229
@@ -42,8 +42,8 @@ SUBMISSION_OUTPUT_PATH = 'submission.csv'
 
 # WandB settings
 USE_WANDB = True  # Set to False to disable WandB
-WANDB_PROJECT = "qwen3-32b-math-misconceptions"
-WANDB_RUN_NAME = f"qwen3-32b-ver{VER}"
+WANDB_PROJECT = "qwen3-32b-awq-math-misconceptions"
+WANDB_RUN_NAME = f"qwen3-32b-awq-ver{VER}"
 WANDB_ENTITY = None  # Set your WandB entity (username or team name) if needed
 
 # Early stopping settings
@@ -65,5 +65,4 @@ MAX_GRAD_NORM = 1.0  # Gradient clipping value
 
 # AWQ quantization settings
 USE_AWQ_QUANTIZATION = True  # Enable AWQ quantization (pre-quantized model)
-AWQ_FUSE_LAYERS = True  # Enable layer fusion for better performance
-AWQ_FUSE_MAX_SEQ_LEN = 4096  # Maximum sequence length for fused layers
+AWQ_FUSE_LAYERS = False  # Disable layer fusion (Qwen3 not supported)
