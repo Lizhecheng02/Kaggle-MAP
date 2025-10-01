@@ -7,6 +7,7 @@ import numpy as np
 from sklearn.preprocessing import LabelEncoder
 from transformers import (
     AutoModelForSequenceClassification,
+    Gemma3ForSequenceClassification,
     AutoTokenizer,
     TrainingArguments,
     Trainer,
@@ -36,7 +37,187 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
+# Global storage for metric data
+METRIC_DATA_STORE = {}
+
+def store_metric_data(dataset, label_encoder, split_name="eval"):
+    """Store arbitrary fields from dataset for metric computation"""
+    global METRIC_DATA_STORE
+    METRIC_DATA_STORE[split_name] = {
+        'is_correct': dataset['is_correct'],
+        'QuestionId': dataset['QuestionId'],
+        'label_encoder': label_encoder,
+        # Add any other fields you need
+    }
+
+
+def compute_map_k_custom(eval_pred, k):
+
+    logits, labels = eval_pred
+
+    global METRIC_DATA_STORE
+    metric_data = METRIC_DATA_STORE.get('eval', {})
+
+    question_label_choices = {
+        '31772': [
+            '31772:Correct:NA',
+            'Q:Neither:NA',
+            '31772:Misconception:Incomplete',
+            '31772:Misconception:WNB',
+        ],
+        '31774': [
+            '31774:Correct:NA',
+            'Q:Neither:NA',
+            '31774:Misconception:SwapDividend',
+            '31774:Misconception:Mult',
+            '31774:Misconception:FlipChange',
+        ],
+        '31777': [
+            '31777:Correct:NA',
+            'Q:Neither:NA',
+            '31777:Misconception:Incomplete',
+            '31777:Misconception:Irrelevant',
+            '31777:Misconception:Wrong_Fraction',
+        ],
+        '31778': [
+            '31778:Correct:NA',
+            'Q:Neither:NA',
+            '31778:Misconception:Additive',
+            '31778:Misconception:Irrelevant',
+            '31778:Misconception:WNB',
+        ],
+        '32829': [
+            '32829:Correct:NA',
+            'Q:Neither:NA',
+            '32829:Misconception:Not_variable',
+            '32829:Misconception:Adding_terms',
+            '32829:Misconception:Inverse_operation'
+        ],
+        '32833': [
+            '32833:Correct:NA',
+            'Q:Neither:NA',
+            '32833:Misconception:Inversion',
+            '32833:Misconception:Duplication',
+            '32833:Misconception:Wrong_Operation'
+        ],
+        '32835': [
+            '32835:Correct:NA',
+            'Q:Neither:NA',
+            '32835:Misconception:Whole_numbers_larger',
+            '32835:Misconception:Longer_is_bigger',
+            '32835:Misconception:Ignores_zeroes',
+            '32835:Misconception:Shorter_is_bigger',
+        ],
+        '33471': [
+            '33471:Correct:NA',
+            'Q:Neither:NA',
+            '33471:Misconception:Wrong_fraction',
+            '33471:Misconception:Incomplete',
+        ],
+        '33472': [
+            '33472:Correct:NA',
+            'Q:Neither:NA',
+            '33472:Misconception:Adding_across',
+            '33472:Misconception:Denominator-only_change',
+            '33472:Misconception:Incorrect_equivalent_fraction_addition',
+        ],
+        '33474': [
+            '33474:Correct:NA',
+            'Q:Neither:NA',
+            '33474:Misconception:Division',
+            '33474:Misconception:Subtraction',
+        ],
+        '76870': [
+            '76870:Correct:NA',
+            'Q:Neither:NA',
+            '76870:Misconception:Unknowable',
+            '76870:Misconception:Definition',
+            '76870:Misconception:Interior',
+        ],
+        '89443': [
+            '89443:Correct:NA',
+            'Q:Neither:NA',
+            '89443:Misconception:Positive',
+            '89443:Misconception:Tacking',
+        ],
+        '91695': [
+            '91695:Correct:NA',
+            'Q:Neither:NA',
+            '91695:Misconception:Wrong_term',
+            '91695:Misconception:Firstterm',
+        ],
+        '104665': [
+            '104665:Correct:NA',
+            'Q:Neither:NA',
+            '104665:Misconception:Base_rate',
+            '104665:Misconception:Multiplying_by_4',
+        ],
+        '109465': [
+            '109465:Correct:NA',
+            'Q:Neither:NA',
+            '109465:Misconception:Certainty',
+            '109465:Misconception:Scale',
+        ]
+    }
+    
+    # Normalize for Label Encoder
+    question_label_choice_ids = {}
+    label_encoder = metric_data.get('label_encoder')
+    
+    for qid, choices in question_label_choices.items():
+        _label_ids = np.where(np.isin(label_encoder.classes_, choices))[0]
+        question_label_choice_ids[qid] = [int(x) for x in _label_ids]
+    
+    question_ids = metric_data.get("QuestionId")
+    is_correct_flags = metric_data.get("is_correct")
+    
+    total_score = 0.0
+    valid_samples = 0
+    
+    for i, (qid, correct, row_logits, true_label_id) in enumerate(zip(
+        question_ids, is_correct_flags, logits, labels
+    )):
+        # Get candidate indices for this question
+        candidate_idx = question_label_choice_ids[qid]
+        
+        # **KEY FIX**: Check if true label is in candidates
+        if true_label_id not in candidate_idx:
+            print(f"Warning: True label {true_label_id} not in candidates for question {qid}")
+            continue
+            
+        valid_samples += 1
+        
+        # Filter logits to only candidates
+        candidate_logits = row_logits[candidate_idx]
+        candidate_probs = torch.nn.functional.softmax(torch.tensor(candidate_logits), dim=-1).numpy()
+        
+        # Get top k from candidates
+        top_k_indices = np.argsort(-candidate_probs)[:k]
+        
+        # Convert back to original label space
+        topk_original_idx = np.array(candidate_idx)[top_k_indices]
+        
+        # Get the predicted and true labels
+        topk_preds = label_encoder.inverse_transform(topk_original_idx).tolist()
+        true_label = label_encoder.inverse_transform([true_label_id])[0]
+        
+        # Apply correct/incorrect prefix
+        correct_prefix = "True_" if correct else "False_"
+        
+        # Process predictions and true label
+        processed_preds = [correct_prefix + pred.split(":", maxsplit=1)[1] for pred in topk_preds]
+        processed_true_label = correct_prefix + true_label.split(":", maxsplit=1)[1]
+        
+        # Calculate score for this sample
+        for rank_idx, predicted_label in enumerate(processed_preds):
+            if predicted_label == processed_true_label:
+                total_score += 1.0 / (rank_idx + 1)
+                break
+    
+    return {f"map@{k}": total_score / valid_samples if valid_samples > 0 else 0.0}
+
+
+def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, label_encoder):
     """
     Train a single fold and return validation predictions and labels
     """
@@ -49,7 +230,7 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
     os.makedirs(fold_output_dir, exist_ok=True)
 
     # Prepare datasets
-    COLS = ["text", "label"]
+    COLS = ["text", "label", "is_correct", "QuestionId"]
     train_ds = Dataset.from_pandas(train_df[COLS])
     val_ds = Dataset.from_pandas(val_df[COLS])
 
@@ -58,22 +239,28 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
     train_ds = tokenize_dataset(train_ds, tokenizer, cfg.MAX_LEN)
     val_ds = tokenize_dataset(val_ds, tokenizer, cfg.MAX_LEN)
 
+    # Store the data needed to correctly calculate metric
+    store_metric_data(val_ds, label_encoder, "eval")
+    
+    n_classes = len(label_encoder.classes_)
+
     # Initialize model
     print("Initializing model...")
     torch.cuda.empty_cache()
     gc.collect()
 
     try:
-        model = AutoModelForSequenceClassification.from_pretrained(
+        model = Gemma3ForSequenceClassification.from_pretrained(
             cfg.MODEL_NAME,
             num_labels=n_classes,
             trust_remote_code=True,
             device_map="auto",
             torch_dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
-            attn_implementation="flash_attention_2",
+            attn_implementation="eager",
         )
-        model.config.pad_token_id = tokenizer.pad_token_id
+        #model.config.pad_token_id = tokenizer.pad_token_id
+        model.config.use_cache = False  # Disable caching for training
 
         # Configure LoRA
         lora_config = LoraConfig(
@@ -94,7 +281,7 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
             device_map="auto",
             torch_dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
-            attn_implementation="flash_attention_2",
+            attn_implementation="eager",
         )
 
         model = LLMForSequenceClassification(base_model, n_classes)
@@ -183,7 +370,7 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
         eval_dataset=val_ds,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        compute_metrics=lambda eval_pred: compute_map_k(eval_pred, k=3),
+        compute_metrics=lambda eval_pred: compute_map_k_custom(eval_pred, k=3),
         callbacks=callbacks,
     )
 
@@ -258,48 +445,6 @@ def main():
     print("Loading and preprocessing training data...")
     train = pd.read_parquet(cfg.TRAIN_DATA_PATH)
 
-    synth = pd.read_parquet(cfg.SYNTH_DATA_PATH)
-    synth['fold'] = -1
-    del synth['is_correct']
-
-    #synth = []
-    #for cluster_id, s in df.groupby("ClusterId"):
-    #
-    #    #t = g[g['fold']==0].copy()
-    #    #s = g[g['fold']==1].copy()
-    #
-    #    if not s.empty:
-    #
-    #        #if s.shape[0] > 100:
-    #        #    s = s.sample(n=100, random_state=42, replace=True)
-    #
-    #        s = s.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation']).reset_index(drop=True)
-    #        synth += s.to_dict(orient='records')
-    #
-    #    #synth += t.to_dict(orient='records')
-    #
-    #synth = pd.DataFrame(synth)
-    #synth = synth.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation']).reset_index(drop=True)
-    
-    train['fold'] = 0
-    train = pd.concat([
-        train,
-        synth
-    ])
-    train = train.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation']).reset_index(drop=True)
-
-    #train = synth
-    #synth['fold'] = -1
-
-    #synth = pd.read_parquet(cfg.SYNTH_DATA_PATH)
-    #synth = synth[synth['Category'].str.contains("Neither")]
-    #
-    #train = pd.concat([
-    #    train,
-    #    synth
-    #])
-    #train = train.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation'], keep='first').reset_index(drop=True)
-
     if cfg.DEBUG:
         train = train.sample(n=10, random_state=cfg.RANDOM_SEED)
 
@@ -310,7 +455,22 @@ def main():
         )
 
     train.Misconception = train.Misconception.fillna("NA")
-    train["target"] = train.Category + ":" + train.Misconception
+    train["BaseCategory"] = train["Category"].apply(lambda x: x.split("_")[1])
+
+    # Create the target types
+    # Needs to correspond to mapping in metrics
+    def process_targets(x):
+
+        if "Neither" in x['BaseCategory']:
+            return f"Q:{x['BaseCategory']}:{x['Misconception']}"
+        else:
+            return f"{x['QuestionId']}:{x['BaseCategory']}:{x['Misconception']}"
+
+    train["target"] = train.apply(lambda x: process_targets(x), axis=1)
+
+    print(train["target"][:20].tolist)
+    #train["target"] = train.QuestionId + ":" + train.BaseCategory + ":" + train.Misconception
+    #train["target"] = train.Category + ":" + train.Misconception
 
     # Label encoding
     le = LabelEncoder()
@@ -323,17 +483,27 @@ def main():
     print("Performing feature engineering...")
     correct = prepare_correct_answers(train)
     train = train.merge(correct, on=["QuestionId", "MC_Answer"], how="left")
-    train.is_correct = train.is_correct.fillna(0)
+    
+    train['is_correct'] = train['is_correct'].fillna(0)
 
     # Initialize tokenizer
     print("Initializing tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        cfg.MODEL_NAME,
+        trust_remote_code=True,
+        padding_side='right',
+        add_bos=True
+    )
 
     # Handle Phi-4 tokenizer
     if "microsoft/phi-4" in cfg.MODEL_NAME.lower():
         if tokenizer.pad_token is None:
             tokenizer.pad_token = "<|finetune_right_pad_id|>"
             tokenizer.pad_token_id = 100257
+    else:
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
 
     print("Formatting input text...")
     # Get the prompt creation function
@@ -372,7 +542,7 @@ def main():
 
     print(f"\nStarting {cfg.FOLDS}-fold cross-validation training...")
 
-    for fold_id in range(cfg.FOLDS):
+    for fold_id in cfg.FOLD_LIST:
         # Initialize fold-specific wandb run
         fold_run = None
         if cfg.USE_WANDB:
@@ -397,8 +567,12 @@ def main():
             )
 
         # Split data by fold
-        val_fold_data = train[train["fold"] == fold_id].copy()
-        train_fold_data = train[train["fold"] != fold_id].copy()
+        if cfg.TRAIN_FULL_DATA:
+            val_fold_data = train[train["fold"] == fold_id][:2].copy()
+            train_fold_data = train 
+        else:
+            val_fold_data = train[train["fold"] == fold_id].copy()
+            train_fold_data = train[train["fold"] != fold_id].copy()
 
         print(
             f"\nFold {fold_id}: Train size = {len(train_fold_data)}, Val size = {len(val_fold_data)}"
@@ -411,7 +585,7 @@ def main():
             train_df=train_fold_data,
             val_df=val_fold_data,
             tokenizer=tokenizer,
-            n_classes=n_classes,
+            label_encoder=le,
         )
 
         # Close fold-specific wandb run

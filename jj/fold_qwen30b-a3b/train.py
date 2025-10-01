@@ -258,48 +258,6 @@ def main():
     print("Loading and preprocessing training data...")
     train = pd.read_parquet(cfg.TRAIN_DATA_PATH)
 
-    synth = pd.read_parquet(cfg.SYNTH_DATA_PATH)
-    synth['fold'] = -1
-    del synth['is_correct']
-
-    #synth = []
-    #for cluster_id, s in df.groupby("ClusterId"):
-    #
-    #    #t = g[g['fold']==0].copy()
-    #    #s = g[g['fold']==1].copy()
-    #
-    #    if not s.empty:
-    #
-    #        #if s.shape[0] > 100:
-    #        #    s = s.sample(n=100, random_state=42, replace=True)
-    #
-    #        s = s.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation']).reset_index(drop=True)
-    #        synth += s.to_dict(orient='records')
-    #
-    #    #synth += t.to_dict(orient='records')
-    #
-    #synth = pd.DataFrame(synth)
-    #synth = synth.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation']).reset_index(drop=True)
-    
-    train['fold'] = 0
-    train = pd.concat([
-        train,
-        synth
-    ])
-    train = train.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation']).reset_index(drop=True)
-
-    #train = synth
-    #synth['fold'] = -1
-
-    #synth = pd.read_parquet(cfg.SYNTH_DATA_PATH)
-    #synth = synth[synth['Category'].str.contains("Neither")]
-    #
-    #train = pd.concat([
-    #    train,
-    #    synth
-    #])
-    #train = train.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation'], keep='first').reset_index(drop=True)
-
     if cfg.DEBUG:
         train = train.sample(n=10, random_state=cfg.RANDOM_SEED)
 

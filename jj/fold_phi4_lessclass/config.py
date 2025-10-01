@@ -5,8 +5,9 @@ from typing import List, Optional
 @dataclass
 class Config:
     # Model configuration
-    VER: int = 1
+    VER: int = 5
     MODEL_NAME: str = "microsoft/phi-4"
+    #MODEL_NAME: str = "microsoft/Phi-4-reasoning-plus"
 
     DEBUG: bool = False
     RANDOM_SEED: int = 42
@@ -18,8 +19,16 @@ class Config:
     TRAIN_DATA_PATH: str = "../outputs/train_fold.parquet"
     TEST_DATA_PATH: str = "../../input/map-charting-student-math-misunderstandings/test.csv"
     INFERENCE_DATA_PATH: str = "../outputs/train_fold.parquet"
-    FOLDS: int = 5    
+    
+    FOLD_LIST: List[int] = field(default_factory=lambda: [0])
+    FOLDS: int = 5
+
     MAX_LEN: int = 512
+
+
+    TRAIN_FULL_DATA: bool = True
+    if TRAIN_FULL_DATA:
+        FOLDS = 1
 
     # Prompt
     PROMPT_VERSION: str = "create_prompt_v1"
@@ -41,21 +50,20 @@ class Config:
     USE_DORA: bool = False
 
     # Training parameters
-    EPOCHS: int = 4
-    TRAIN_BATCH_SIZE: int = 32
-    EVAL_BATCH_SIZE: int = 32
-    GRADIENT_ACCUMULATION_STEPS: int = 2
-    LEARNING_RATE: float = 1e-4
+    EPOCHS: int = 2
+    TRAIN_BATCH_SIZE: int = 64
+    EVAL_BATCH_SIZE: int = 64
+    GRADIENT_ACCUMULATION_STEPS: int = 1
+    LEARNING_RATE: float = 2e-4
     LOGGING_STEPS: int = 10
     SAVE_STEPS: int = 100
     EVAL_STEPS: int = 100
-    LABEL_SMOOTHING_FACTOR: float = 0.05
-    TRAIN_FULL_DATA: bool = False
+    LABEL_SMOOTHING_FACTOR: float = 0
     WARM_UP: float = 0.0
     
     # Early stopping settings
-    USE_EARLY_STOPPING: bool = True
-    EARLY_STOPPING_PATIENCE: int = 10
+    USE_EARLY_STOPPING: bool = False
+    EARLY_STOPPING_PATIENCE: int = 100
     EARLY_STOPPING_THRESHOLD: float = 0.001
 
     # Memory optimization settings

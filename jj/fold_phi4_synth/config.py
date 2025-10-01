@@ -15,7 +15,7 @@ class Config:
     CUDA_VISIBLE_DEVICES: Optional[str] = None
     
     # Data paths
-    TRAIN_DATA_PATH: str = "../outputs/train_fold.parquet"
+    TRAIN_DATA_PATH: str = "./invert_synthetic_data_filtered.parquet"
     TEST_DATA_PATH: str = "../../input/map-charting-student-math-misunderstandings/test.csv"
     INFERENCE_DATA_PATH: str = "../outputs/train_fold.parquet"
     FOLDS: int = 5    
@@ -26,7 +26,7 @@ class Config:
     
     # LoRA configurations
     LORA_RANK: int = 64
-    LORA_ALPHA: int = 128
+    LORA_ALPHA: int = 16
     LORA_TARGET_MODULES: List[str] = field(default_factory=lambda: [
         "q_proj",
         "v_proj",
@@ -44,12 +44,12 @@ class Config:
     EPOCHS: int = 4
     TRAIN_BATCH_SIZE: int = 32
     EVAL_BATCH_SIZE: int = 32
-    GRADIENT_ACCUMULATION_STEPS: int = 2
-    LEARNING_RATE: float = 1e-4
+    GRADIENT_ACCUMULATION_STEPS: int = 1
+    LEARNING_RATE: float = 2e-4
     LOGGING_STEPS: int = 10
     SAVE_STEPS: int = 100
     EVAL_STEPS: int = 100
-    LABEL_SMOOTHING_FACTOR: float = 0.05
+    LABEL_SMOOTHING_FACTOR: float = 0.00
     TRAIN_FULL_DATA: bool = False
     WARM_UP: float = 0.0
     

@@ -22,11 +22,11 @@ class Config:
     MAX_LEN: int = 512
 
     # Prompt
-    PROMPT_VERSION: str = "create_prompt_v1"
+    PROMPT_VERSION: str = "create_prompt_think_v1"
     
     # LoRA configurations
     LORA_RANK: int = 64
-    LORA_ALPHA: int = 128
+    LORA_ALPHA: int = 16
     LORA_TARGET_MODULES: List[str] = field(default_factory=lambda: [
         "q_proj",
         "v_proj",
@@ -41,15 +41,15 @@ class Config:
     USE_DORA: bool = False
 
     # Training parameters
-    EPOCHS: int = 4
+    EPOCHS: int = 3
     TRAIN_BATCH_SIZE: int = 32
     EVAL_BATCH_SIZE: int = 32
-    GRADIENT_ACCUMULATION_STEPS: int = 2
-    LEARNING_RATE: float = 1e-4
+    GRADIENT_ACCUMULATION_STEPS: int = 1
+    LEARNING_RATE: float = 2e-4
     LOGGING_STEPS: int = 10
-    SAVE_STEPS: int = 100
-    EVAL_STEPS: int = 100
-    LABEL_SMOOTHING_FACTOR: float = 0.05
+    SAVE_STEPS: int = 90
+    EVAL_STEPS: int = 90
+    LABEL_SMOOTHING_FACTOR: float = 0.0
     TRAIN_FULL_DATA: bool = False
     WARM_UP: float = 0.0
     
@@ -73,7 +73,7 @@ class Config:
     
     @property
     def OUTPUT_DIR(self) -> str:
-        return f"map_{self.MODEL_NAME.replace('/', '_')}_ver_{self.VER}_seed_{self.RANDOM_SEED}"
+        return f"map_{self.MODEL_NAME.replace('/', '_')}_ver_{self.VER}"
     
     @property
     def BEST_MODEL_PATH(self) -> str:

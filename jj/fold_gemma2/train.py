@@ -2,6 +2,7 @@ import os
 import gc
 import pickle
 import joblib
+import random
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
@@ -36,7 +37,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
+def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes, alpha_vec_or_none):
     """
     Train a single fold and return validation predictions and labels
     """
@@ -74,7 +75,7 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
             attn_implementation="flash_attention_2",
         )
         model.config.pad_token_id = tokenizer.pad_token_id
-
+    
         # Configure LoRA
         lora_config = LoraConfig(
             r=cfg.LORA_RANK,
@@ -85,7 +86,7 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
             task_type=TaskType.SEQ_CLS,
             use_dora=cfg.USE_DORA,
         )
-
+    
     except Exception:
         print("Using custom classification head for Phi-4...")
         base_model = AutoModel.from_pretrained(
@@ -97,31 +98,51 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
             attn_implementation="flash_attention_2",
         )
 
-        model = LLMForSequenceClassification(base_model, n_classes)
+        model = LLMForSequenceClassification(base_model, n_classes, alpha_vec_or_none)
 
-        lora_config = LoraConfig(
-            r=cfg.LORA_RANK,
-            lora_alpha=cfg.LORA_ALPHA,
-            target_modules=cfg.LORA_TARGET_MODULES,
-            lora_dropout=cfg.LORA_DROPOUT,
-            bias=cfg.LORA_BIAS,
-            task_type=TaskType.FEATURE_EXTRACTION,
-            use_dora=cfg.USE_DORA,
-        )
+
+    #for name, param in model.named_parameters():
+    #    if 'classifier' in name or 'dropout' in name:
+    #        param.requires_grad = True
+    #        print(f"Made trainable: {name}")
+    #
+    ## Or more specifically:
+    #if hasattr(model, 'classifier'):
+    #    for param in model.classifier.parameters():
+    #        param.requires_grad = True
+    #        print("Classification layer made trainable")
+    #
+    #if hasattr(model, 'dropout'):
+    #    for param in model.dropout.parameters():
+    #        param.requires_grad = True
+    #        print("Dropout layer made trainable")
+
+    lora_config = LoraConfig(
+        r=cfg.LORA_RANK,
+        lora_alpha=cfg.LORA_ALPHA,
+        target_modules=cfg.LORA_TARGET_MODULES,
+        lora_dropout=cfg.LORA_DROPOUT,
+        bias=cfg.LORA_BIAS,
+        task_type=TaskType.FEATURE_EXTRACTION,
+        use_dora=cfg.USE_DORA,
+    )
 
     # Apply PEFT
     model = get_peft_model(model, lora_config)
+
+
     print("Number of trainable parameters:")
     model.print_trainable_parameters()
+
 
     # Enable gradient checkpointing
     if hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()
 
-    if hasattr(model.base_model, "gradient_checkpointing_enable"):
-        model.base_model.gradient_checkpointing_enable()
-    elif hasattr(model, "gradient_checkpointing_enable"):
-        model.gradient_checkpointing_enable()
+    #if hasattr(model.base_model, "gradient_checkpointing_enable"):
+    #    model.base_model.gradient_checkpointing_enable()
+    #elif hasattr(model, "gradient_checkpointing_enable"):
+    #    model.gradient_checkpointing_enable()
 
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -147,7 +168,7 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
         report_to="wandb" if cfg.USE_WANDB else "none",
         fp16=False,
         bf16=True,
-        gradient_checkpointing=True,
+        gradient_checkpointing=False,
         gradient_accumulation_steps=cfg.GRADIENT_ACCUMULATION_STEPS,
         remove_unused_columns=False,
         lr_scheduler_type="cosine",
@@ -156,6 +177,7 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
         save_total_limit=2,
         max_grad_norm=cfg.MAX_GRAD_NORM,
         optim="adamw_bnb_8bit" if cfg.USE_8BIT_ADAM else "adamw_torch",
+        dataloader_pin_memory=True,
     )
 
     # Data collator
@@ -239,6 +261,14 @@ def train_single_fold(cfg, fold_id, train_df, val_df, tokenizer, n_classes):
     }
 
 
+def effective_num_weights(counts, beta=0.9999):
+    counts = np.asarray(counts, dtype=np.float64)
+    eff_num = 1.0 - np.power(beta, counts)
+    weights = (1.0 - beta) / np.maximum(eff_num, 1e-12)
+    weights = weights / np.mean(weights)  # normalize mean to 1
+    return torch.tensor(weights, dtype=torch.float32)
+
+
 def main():
     cfg = Config()
 
@@ -258,50 +288,8 @@ def main():
     print("Loading and preprocessing training data...")
     train = pd.read_parquet(cfg.TRAIN_DATA_PATH)
 
-    synth = pd.read_parquet(cfg.SYNTH_DATA_PATH)
-    synth['fold'] = -1
-    del synth['is_correct']
-
-    #synth = []
-    #for cluster_id, s in df.groupby("ClusterId"):
-    #
-    #    #t = g[g['fold']==0].copy()
-    #    #s = g[g['fold']==1].copy()
-    #
-    #    if not s.empty:
-    #
-    #        #if s.shape[0] > 100:
-    #        #    s = s.sample(n=100, random_state=42, replace=True)
-    #
-    #        s = s.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation']).reset_index(drop=True)
-    #        synth += s.to_dict(orient='records')
-    #
-    #    #synth += t.to_dict(orient='records')
-    #
-    #synth = pd.DataFrame(synth)
-    #synth = synth.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation']).reset_index(drop=True)
-    
-    train['fold'] = 0
-    train = pd.concat([
-        train,
-        synth
-    ])
-    train = train.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation']).reset_index(drop=True)
-
-    #train = synth
-    #synth['fold'] = -1
-
-    #synth = pd.read_parquet(cfg.SYNTH_DATA_PATH)
-    #synth = synth[synth['Category'].str.contains("Neither")]
-    #
-    #train = pd.concat([
-    #    train,
-    #    synth
-    #])
-    #train = train.drop_duplicates(subset=['QuestionId', 'QuestionText', 'MC_Answer', 'Category', 'Misconception', 'StudentExplanation'], keep='first').reset_index(drop=True)
-
     if cfg.DEBUG:
-        train = train.sample(n=10, random_state=cfg.RANDOM_SEED)
+        train = train.sample(n=1000, random_state=cfg.RANDOM_SEED)
 
     # Check if fold column exists
     if "fold" not in train.columns:
@@ -312,9 +300,35 @@ def main():
     train.Misconception = train.Misconception.fillna("NA")
     train["target"] = train.Category + ":" + train.Misconception
 
+    if cfg.THINK:
+        random.seed(cfg.RANDOM_SEED)
+
+        n_to_replace = len(train) // 2
+
+        indices_to_replace = random.sample(list(train.index), n_to_replace)
+
+        train.loc[indices_to_replace, 'think'] = ""
+    else:
+        train['think'] = ""
+
     # Label encoding
     le = LabelEncoder()
     train["label"] = le.fit_transform(train["target"])
+
+    label_counts = {}
+    for r in train.itertuples():
+        if r.label not in label_counts:
+            label_counts[r.label] = 0
+        
+        label_counts[r.label] += 1
+    label_counts_list = []
+    for l in range(len(label_counts.keys())):
+        label_counts_list.append(label_counts[l])
+
+    print(f"Label Counts: {label_counts}")
+
+    alpha_vec_or_none = effective_num_weights(label_counts_list)
+
     n_classes = len(le.classes_)
     print(f"Dataset shape: {train.shape} with {n_classes} target classes")
     print(f"Available folds: {sorted(train['fold'].unique())}")
@@ -327,13 +341,19 @@ def main():
 
     # Initialize tokenizer
     print("Initializing tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME, trust_remote_code=True, tokenizer_type="mistral")
+
+    # Set padding to left so that we use the last token
+    tokenizer.padding_side = "left"
 
     # Handle Phi-4 tokenizer
     if "microsoft/phi-4" in cfg.MODEL_NAME.lower():
         if tokenizer.pad_token is None:
             tokenizer.pad_token = "<|finetune_right_pad_id|>"
             tokenizer.pad_token_id = 100257
+    else:
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
     print("Formatting input text...")
     # Get the prompt creation function
@@ -412,6 +432,7 @@ def main():
             val_df=val_fold_data,
             tokenizer=tokenizer,
             n_classes=n_classes,
+            alpha_vec_or_none=alpha_vec_or_none,
         )
 
         # Close fold-specific wandb run

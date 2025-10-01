@@ -6,7 +6,7 @@ from typing import List, Optional
 class Config:
     # Model configuration
     VER: int = 1
-    MODEL_NAME: str = "microsoft/phi-4"
+    MODEL_NAME: str = "Qwen/Qwen3-4B-Instruct-2507"
 
     DEBUG: bool = False
     RANDOM_SEED: int = 42
@@ -41,15 +41,15 @@ class Config:
     USE_DORA: bool = False
 
     # Training parameters
-    EPOCHS: int = 4
+    EPOCHS: int = 3
     TRAIN_BATCH_SIZE: int = 32
     EVAL_BATCH_SIZE: int = 32
     GRADIENT_ACCUMULATION_STEPS: int = 2
-    LEARNING_RATE: float = 1e-4
+    LEARNING_RATE: float = 2e-4
     LOGGING_STEPS: int = 10
     SAVE_STEPS: int = 100
     EVAL_STEPS: int = 100
-    LABEL_SMOOTHING_FACTOR: float = 0.05
+    LABEL_SMOOTHING_FACTOR: float = 0.0
     TRAIN_FULL_DATA: bool = False
     WARM_UP: float = 0.0
     
