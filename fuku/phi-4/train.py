@@ -293,7 +293,7 @@ def main():
         gradient_checkpointing=True,  # メモリ効率化のため有効化
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない
-        lr_scheduler_type="cosine",  # コサインスケジューラーを使用
+        lr_scheduler_type="linear",  # コサインスケジューラーを使用
         warmup_ratio=0.0,  # ウォームアップを無効化
         save_total_limit=2,
         max_grad_norm=MAX_GRAD_NORM,  # Gradient clipping
