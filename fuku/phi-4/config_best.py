@@ -7,7 +7,7 @@ VER = 2
 MODEL_NAME = "/kaggle/input/models/phi-4"
 MODEL_TYPE = "phi"  # Phi-4 model type
 EPOCHS = 3  # Reduce epochs for initial testing
-MAX_LEN = 250  # Phi-4 supports longer context
+MAX_LEN = 300  # Phi-4 supports longer context
 
 # Directory settings
 OUTPUT_DIR = f"ver_{VER}"
@@ -15,11 +15,11 @@ OUTPUT_DIR = f"ver_{VER}"
 # Training parameters
 TRAIN_BATCH_SIZE = 4  # Smaller batch size for Phi-4
 EVAL_BATCH_SIZE = 4  # Eval batch size
-GRADIENT_ACCUMULATION_STEPS = 16  # Increased for effective batch size
+GRADIENT_ACCUMULATION_STEPS = 8  # Increased for effective batch size
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 50
-SAVE_STEPS = 229
-EVAL_STEPS = 229
+SAVE_STEPS = 458
+EVAL_STEPS = 458
 
 
 # Data paths

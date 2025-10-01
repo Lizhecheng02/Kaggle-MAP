@@ -27,7 +27,8 @@ import gc
 
 # カスタムモジュールのインポート
 from config import *
-from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3
+from utils import prepare_correct_answers, tokenize_dataset, compute_map3
+from prompts import prompt_registry
 from data_collator import DataCollatorWithPadding
 
 
@@ -42,7 +43,7 @@ class SaveBestMap3Callback(TrainerCallback):
         current_map3 = metrics.get('eval_map@3', 0.0)
         current_step = state.global_step
         total_steps = state.max_steps if state.max_steps else "N/A"
-
+        
         print(f"\n[Step {current_step}/{total_steps}] 評価実行 - MAP@3スコア: {current_map3:.4f}")
 
         if current_map3 > self.best_map3:
@@ -69,7 +70,7 @@ class Phi4ForSequenceClassification(nn.Module):
         super().__init__()
         from transformers import AutoModel
         self.phi = AutoModel.from_pretrained(
-            model_name,
+            model_name, 
             trust_remote_code=True,
             attn_implementation=attn_implementation
         )
@@ -157,20 +158,30 @@ def main():
 
     # --- 入力テキストのフォーマット ---
     print("Formatting input text...")
-    train['text'] = train.apply(format_input, axis=1)
+    # プロンプト生成関数を取得（設定可能）
+    prompt_function_name = PROMPT_FUNCTION
+    prompt_function = prompt_registry.get(prompt_function_name)
+    if prompt_function is None:
+        print(f"Warning: プロンプト関数 '{prompt_function_name}' が見つかりません。デフォルト関数を使用します。")
+        prompt_function = prompt_registry['create_prompt_original']
+    
+    print(f"Using prompt function: {prompt_function_name}")
+    
+    # トークナイザーを先に初期化（プロンプト生成に必要）
+    print("Initializing tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    
+    # パディングトークンの設定
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = "<|finetune_right_pad_id|>"
+        tokenizer.pad_token_id = 100257
+    
+    # プロンプト生成（tokenizerが必要）
+    train['text'] = train.apply(lambda row: prompt_function(tokenizer, row), axis=1)
     print("Example prompt for our LLM:")
     print(train.text.values[0])
 
-    # --- トークナイザーの初期化 ---
-    print("Initializing tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-
-    # パディングトークンの設定
-    # Phi-4モデルの場合の設定
-    if tokenizer.pad_token is None:
-        # Phi-4では特別なパディングトークンを使用
-        tokenizer.pad_token = "<|finetune_right_pad_id|>"
-        tokenizer.pad_token_id = 100257
+    # トークナイザーは既に初期化済み
 
     # --- トークン長の分析 ---
     print("Analyzing token lengths...")
@@ -360,7 +371,7 @@ def main():
     print(f"\n🏁 最終評価結果:")
     print(f"   最終MAP@3スコア: {final_map3:.4f}")
     print(f"   全体のベストMAP@3スコア: {save_best_callback.best_map3:.4f}")
-
+    
     # 最終評価が新しいベストスコアの場合、明示的に保存
     if final_map3 > save_best_callback.best_map3:
         print(f"🎉 最終評価で新しいベストスコア達成！ {final_map3:.4f} > {save_best_callback.best_map3:.4f}")

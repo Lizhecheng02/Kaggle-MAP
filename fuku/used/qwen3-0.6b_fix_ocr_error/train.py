@@ -1,5 +1,5 @@
 """
-Phi-4 モデルトレーニングスクリプト
+Qwen-3-0.6B モデルトレーニングスクリプト
 """
 
 import os
@@ -23,11 +23,10 @@ from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 from transformers import AutoModel
 import wandb
 from transformers import EarlyStoppingCallback, TrainerCallback
-import gc
 
 # カスタムモジュールのインポート
 from config import *
-from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3
+from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3, create_ocr_correction_dict, fix_ocr_errors
 from data_collator import DataCollatorWithPadding
 
 
@@ -40,10 +39,6 @@ class SaveBestMap3Callback(TrainerCallback):
 
     def on_evaluate(self, args, state, control, metrics, model=None, **kwargs):
         current_map3 = metrics.get('eval_map@3', 0.0)
-        current_step = state.global_step
-        total_steps = state.max_steps if state.max_steps else "N/A"
-
-        print(f"\n[Step {current_step}/{total_steps}] 評価実行 - MAP@3スコア: {current_map3:.4f}")
 
         if current_map3 > self.best_map3:
             self.best_map3 = current_map3
@@ -56,28 +51,22 @@ class SaveBestMap3Callback(TrainerCallback):
             model.save_pretrained(best_map3_path)
             self.tokenizer.save_pretrained(best_map3_path)
 
-            print(f"🎉 新しいベストMAP@3スコア更新: {current_map3:.4f} (Step {current_step}) - モデルを {best_map3_path} に保存しました")
-        else:
-            print(f"現在のベストMAP@3スコア: {self.best_map3:.4f} (変更なし)")
+            print(f"\n新しいベストMAP@3スコア: {current_map3:.4f} - モデルを {best_map3_path} に保存しました")
 
         return control
 
 
-class Phi4ForSequenceClassification(nn.Module):
-    """Phi-4モデルを分類タスク用にカスタマイズ"""
-    def __init__(self, model_name, num_labels, attn_implementation="eager"):
+class Qwen2ForSequenceClassification(nn.Module):
+    """Qwen2モデルを分類タスク用にカスタマイズ"""
+    def __init__(self, model_name, num_labels):
         super().__init__()
         from transformers import AutoModel
-        self.phi = AutoModel.from_pretrained(
-            model_name,
-            trust_remote_code=True,
-            attn_implementation=attn_implementation
-        )
+        self.qwen = AutoModel.from_pretrained(model_name, trust_remote_code=True)
         self.dropout = nn.Dropout(0.1)
-        self.classifier = nn.Linear(self.phi.config.hidden_size, num_labels)
+        self.classifier = nn.Linear(self.qwen.config.hidden_size, num_labels)
 
     def forward(self, input_ids, attention_mask=None, labels=None):
-        outputs = self.phi(input_ids=input_ids, attention_mask=attention_mask)
+        outputs = self.qwen(input_ids=input_ids, attention_mask=attention_mask)
         # 最後のトークンの隠れ状態を使用
         pooled_output = outputs.last_hidden_state[:, -1, :]
         pooled_output = self.dropout(pooled_output)
@@ -93,15 +82,6 @@ class Phi4ForSequenceClassification(nn.Module):
 
 def main():
     """メイントレーニング関数"""
-
-    # config.pyの内容を出力
-    print("=" * 80)
-    print("Configuration Settings (config.py):")
-    print("=" * 80)
-    with open('config.py', 'r', encoding='utf-8') as f:
-        print(f.read())
-    print("=" * 80)
-    print()
 
     # WandBの初期化
     if USE_WANDB:
@@ -122,8 +102,6 @@ def main():
                 "lora_target_modules": LORA_TARGET_MODULES,
                 "lora_dropout": LORA_DROPOUT,
                 "lora_bias": LORA_BIAS,
-                "use_dora": USE_DORA,
-                "attention_implementation": ATTENTION_IMPLEMENTATION,
             }
         )
 
@@ -131,10 +109,6 @@ def main():
     if CUDA_VISIBLE_DEVICES is not None:
         os.environ['CUDA_VISIBLE_DEVICES'] = CUDA_VISIBLE_DEVICES
         print(f"Using CUDA device(s): {CUDA_VISIBLE_DEVICES}")
-
-    # メモリキャッシュをクリア
-    torch.cuda.empty_cache()
-    gc.collect()
 
     # 出力ディレクトリの作成
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -144,6 +118,25 @@ def main():
     le = LabelEncoder()
     train = pd.read_csv(TRAIN_DATA_PATH)
     train.Misconception = train.Misconception.fillna('NA')
+
+    print("Creating OCR correction dictionary...")
+    # OCRエラー修正用辞書の作成
+    ocr_correction_dict = create_ocr_correction_dict(OCR_CORRECTION_CSV_PATH)
+    print(f"Loaded {len(ocr_correction_dict)} OCR correction patterns")
+
+    print("Applying OCR error corrections to training data...")
+    # StudentExplanation列のOCRエラー修正
+    if 'StudentExplanation' in train.columns:
+        train['StudentExplanation'] = train['StudentExplanation'].apply(
+            lambda x: fix_ocr_errors(x, ocr_correction_dict) if pd.notna(x) else x
+        )
+
+    # QuestionText列のOCRエラー修正（存在する場合）
+    if 'QuestionText' in train.columns:
+        train['QuestionText'] = train['QuestionText'].apply(
+            lambda x: fix_ocr_errors(x, ocr_correction_dict) if pd.notna(x) else x
+        )
+
     train['target'] = train.Category + ":" + train.Misconception
     train['label'] = le.fit_transform(train['target'])
     n_classes = len(le.classes_)
@@ -166,11 +159,12 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
 
     # パディングトークンの設定
-    # Phi-4モデルの場合の設定
+    # Qwen3モデルの場合、特別なトークンIDを使用
     if tokenizer.pad_token is None:
-        # Phi-4では特別なパディングトークンを使用
-        tokenizer.pad_token = "<|finetune_right_pad_id|>"
-        tokenizer.pad_token_id = 100257
+        # 語彙内の安全なトークンIDを使用
+        # Qwenモデルでは、0番のトークンがUNKNOWNトークンとして使われることが多い
+        tokenizer.pad_token_id = 0
+        tokenizer.pad_token = tokenizer.decode([0])
 
     # --- トークン長の分析 ---
     print("Analyzing token lengths...")
@@ -190,6 +184,8 @@ def main():
     # --- データの分割 ---
     print("Splitting data into train and validation sets...")
     train_df, val_df = train_test_split(train, test_size=VALIDATION_SPLIT, random_state=RANDOM_SEED)
+    
+    
     COLS = ['text','label']
     train_ds = Dataset.from_pandas(train_df[COLS])
     val_ds = Dataset.from_pandas(val_df[COLS])
@@ -205,35 +201,28 @@ def main():
 
     # --- モデルの初期化 ---
     print("Initializing model...")
-    print(f"Using attention implementation: {ATTENTION_IMPLEMENTATION}")
     try:
         # 量子化モデルを読み込む
         model = AutoModelForSequenceClassification.from_pretrained(
             MODEL_NAME,
             num_labels=n_classes,
             trust_remote_code=True,
-            device_map=None,  # デバイスマッピングを無効化
-            torch_dtype=torch.bfloat16,  # BF16で読み込み
-            low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
-            attn_implementation=ATTENTION_IMPLEMENTATION  # Attention実装を指定
+            device_map=None  # デバイスマッピングを無効化
         )
         # パディングトークンIDを設定
         model.config.pad_token_id = tokenizer.pad_token_id
     except:
         # 失敗した場合はカスタムクラスを使用
-        print("Using custom classification head for Phi-4...")
+        print("Using custom classification head for Qwen2...")
         # ベースモデルを読み込む
         base_model = AutoModel.from_pretrained(
             MODEL_NAME,
             trust_remote_code=True,
-            device_map=None,
-            torch_dtype=torch.bfloat16,  # BF16で読み込み
-            low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
-            attn_implementation=ATTENTION_IMPLEMENTATION  # Attention実装を指定
+            device_map=None
         )
         # カスタム分類ヘッドを作成
-        model = Phi4ForSequenceClassification(MODEL_NAME, n_classes, ATTENTION_IMPLEMENTATION)
-        model.phi = base_model
+        model = Qwen2ForSequenceClassification(MODEL_NAME, n_classes)
+        model.qwen = base_model
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
@@ -244,7 +233,6 @@ def main():
         lora_dropout=LORA_DROPOUT,
         bias=LORA_BIAS,
         task_type=TaskType.SEQ_CLS,
-        use_dora=USE_DORA  # DoRAの使用
     )
 
     # PEFTモデルの作成
@@ -252,23 +240,9 @@ def main():
     print("Number of trainable parameters:")
     model.print_trainable_parameters()
 
-    # Gradient checkpointingを有効化
-    if hasattr(model, 'enable_input_require_grads'):
-        model.enable_input_require_grads()
-
-    # モデルのgradient checkpointingを有効化
-    if hasattr(model.base_model, 'gradient_checkpointing_enable'):
-        model.base_model.gradient_checkpointing_enable()
-    elif hasattr(model, 'gradient_checkpointing_enable'):
-        model.gradient_checkpointing_enable()
-
     # シングルGPUに設定
     if torch.cuda.is_available():
         model = model.cuda()
-
-    # 追加のメモリ最適化
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
 
     # --- トレーニング引数の設定 ---
     training_args = TrainingArguments(
@@ -289,15 +263,13 @@ def main():
         greater_is_better=True,
         load_best_model_at_end=True,
         report_to="wandb" if USE_WANDB else "none",
-        bf16=True,  # BF16を使用
-        gradient_checkpointing=True,  # メモリ効率化のため有効化
+        bf16=True,  # RTX 5090の互換性問題のため一時的にFalse
+        gradient_checkpointing=False,  # インデックスエラーのため一時的に無効化
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない
         lr_scheduler_type="cosine",  # コサインスケジューラーを使用
         warmup_ratio=0.0,  # ウォームアップを無効化
         save_total_limit=2,
-        max_grad_norm=MAX_GRAD_NORM,  # Gradient clipping
-        optim="adamw_bnb_8bit" if USE_8BIT_ADAM else "adamw_torch",  # 8-bit Adam optimizer
     )
 
     # --- トレーナーのセットアップとトレーニング ---
@@ -351,25 +323,10 @@ def main():
     print("Starting training...")
     trainer.train()
 
-    # --- トレーニング終了後の最終評価 ---
-    print("\n" + "="*60)
-    print("トレーニング完了 - 最終評価を実行中...")
-    print("="*60)
-    final_eval_results = trainer.evaluate()
-    final_map3 = final_eval_results.get('eval_map@3', 0.0)
-    print(f"\n🏁 最終評価結果:")
-    print(f"   最終MAP@3スコア: {final_map3:.4f}")
-    print(f"   全体のベストMAP@3スコア: {save_best_callback.best_map3:.4f}")
-
-    # 最終評価が新しいベストスコアの場合、明示的に保存
-    if final_map3 > save_best_callback.best_map3:
-        print(f"🎉 最終評価で新しいベストスコア達成！ {final_map3:.4f} > {save_best_callback.best_map3:.4f}")
-        save_best_callback.best_map3 = final_map3
-        best_map3_path = os.path.join(OUTPUT_DIR, 'best_map3')
-        os.makedirs(best_map3_path, exist_ok=True)
-        model.save_pretrained(best_map3_path)
-        tokenizer.save_pretrained(best_map3_path)
-        print(f"   最終ベストモデルを {best_map3_path} に保存しました")
+    # --- 最終的なMAP@3スコアを表示 ---
+    print("\nEvaluating on validation set...")
+    eval_results = trainer.evaluate()
+    print(f"\nValidation MAP@3: {eval_results.get('eval_map@3', 'N/A'):.4f}")
 
     # --- モデルの保存 ---
     print("\nSaving model...")

@@ -27,7 +27,7 @@ import gc
 
 # カスタムモジュールのインポート
 from config import *
-from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3
+from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3, build_fewshot_examples_map
 from data_collator import DataCollatorWithPadding
 
 
@@ -42,7 +42,7 @@ class SaveBestMap3Callback(TrainerCallback):
         current_map3 = metrics.get('eval_map@3', 0.0)
         current_step = state.global_step
         total_steps = state.max_steps if state.max_steps else "N/A"
-
+        
         print(f"\n[Step {current_step}/{total_steps}] 評価実行 - MAP@3スコア: {current_map3:.4f}")
 
         if current_map3 > self.best_map3:
@@ -69,7 +69,7 @@ class Phi4ForSequenceClassification(nn.Module):
         super().__init__()
         from transformers import AutoModel
         self.phi = AutoModel.from_pretrained(
-            model_name,
+            model_name, 
             trust_remote_code=True,
             attn_implementation=attn_implementation
         )
@@ -155,9 +155,19 @@ def main():
     train = train.merge(correct, on=['QuestionId','MC_Answer'], how='left')
     train.is_correct = train.is_correct.fillna(0)
 
-    # --- 入力テキストのフォーマット ---
-    print("Formatting input text...")
-    train['text'] = train.apply(format_input, axis=1)
+    # --- 入力テキストのフォーマット（ラベル列挙 + few-shot） ---
+    print("Preparing few-shot examples map...")
+    fewshot_map = build_fewshot_examples_map(train)
+    print("Formatting input text with label enumeration and few-shot examples...")
+    train['text'] = train.apply(
+        lambda r: format_input(
+            r,
+            label_names=list(le.classes_),
+            fewshot_examples_by_qid=fewshot_map,
+            fewshot_k=FEWSHOT_K,
+        ),
+        axis=1,
+    )
     print("Example prompt for our LLM:")
     print(train.text.values[0])
 
@@ -360,7 +370,7 @@ def main():
     print(f"\n🏁 最終評価結果:")
     print(f"   最終MAP@3スコア: {final_map3:.4f}")
     print(f"   全体のベストMAP@3スコア: {save_best_callback.best_map3:.4f}")
-
+    
     # 最終評価が新しいベストスコアの場合、明示的に保存
     if final_map3 > save_best_callback.best_map3:
         print(f"🎉 最終評価で新しいベストスコア達成！ {final_map3:.4f} > {save_best_callback.best_map3:.4f}")

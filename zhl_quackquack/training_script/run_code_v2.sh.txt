@@ -1,0 +1,98 @@
+#!/bin/bash
+set -euo pipefail
+
+# 8 张卡一一对应
+gpus=(0 1 2 3 4 5 6 7)
+
+# version 固定为 1..8（你也可以手动改）
+vers=(9 10 11 12 13 14 15 16)
+
+# 模型名
+models=("Qwen/Qwen3-4B-Instruct-2507" "Qwen/Qwen3-4B-Instruct-2507" \
+        "Qwen/Qwen3-4B-Instruct-2507" "Qwen/Qwen3-4B-Instruct-2507" \
+        "Qwen/Qwen3-4B-Instruct-2507" "Qwen/Qwen3-4B-Instruct-2507" \
+        "Qwen/Qwen3-4B-Instruct-2507" "Qwen/Qwen3-4B-Instruct-2507")
+
+# r 固定
+rs=(16 16 16 16 16 16 16 16)
+
+# mid/end 固定
+mids=(1.0 1.0 1.0 1.0 1.0 1.0 1.0 1.0)
+ends=(1.0 1.0 1.0 1.0 1.0 1.0 1.0 1.0)
+
+# dropout 固定，但有变化
+dropouts=(0.05 0.05 0.05 0.05 0.05 0.05 0.03 0.01)
+
+# 新的学习率 sweep
+lrs=(2.5e-4 2.25e-4 2e-4 2.75e-4 3e-4 5e-4 2.5e-4 2.5e-4)
+
+# 简单的长度校验
+n=${#vers[@]}
+if [[ $n -ne 8 || $n -ne ${#gpus[@]} || $n -ne ${#models[@]} || $n -ne ${#rs[@]} || $n -ne ${#dropouts[@]} || $n -ne ${#lrs[@]} ]]; then
+  echo "数组长度不一致或不是 8，请检查！"
+  exit 1
+fi
+
+mkdir -p logs configs
+
+for ((i=0; i<8; i++)); do
+  gpu=${gpus[$i]}
+  ver=${vers[$i]}
+  model=${models[$i]}
+  r=${rs[$i]}
+  mid=${mids[$i]}
+  end=${ends[$i]}
+  dropout=${dropouts[$i]}
+  lr=${lrs[$i]}
+
+  short_model=$(basename "$model")
+  log_file="logs/ver${ver}_r${r}_${short_model}_lr${lr}_drop${dropout}.log"
+  cfg_file="configs/ver${ver}_r${r}_${short_model}_lr${lr}_drop${dropout}.txt"
+
+  echo "Launching: GPU=$gpu ver=$ver r=$r model=$model lr=$lr dropout=$dropout"
+  echo " -> log: $log_file"
+  echo " -> cfg: $cfg_file"
+
+  # 保存本次运行配置
+  cat > "$cfg_file" <<EOF
+ver: $ver
+model_name: $model
+max_len: 300
+cv_fold: 5
+cv_seed: 42
+r: $r
+lora_alpha: 32
+lr: $lr
+dropout: $dropout
+epochs: 2
+lr_scheduler: linear
+beta_scheduler: step
+start: 1.0
+mid: $mid
+end: $end
+warmup_frac: 1.0
+gpu: $gpu
+EOF
+
+  CUDA_VISIBLE_DEVICES=$gpu python code_less_classes.py \
+    --ver "$ver" \
+    --model_name "$model" \
+    --max_len 300 \
+    --cv_fold 5 \
+    --cv_seed 42 \
+    --r "$r" \
+    --lora_alpha 32 \
+    --lr "$lr" \
+    --dropout "$dropout" \
+    --epochs 2 \
+    --lr_scheduler linear \
+    --beta_scheduler step \
+    --start 1.0 \
+    --mid "$mid" \
+    --end "$end" \
+    --warmup_frac 1.0 \
+    > "$log_file" 2>&1 &
+done
+
+wait
+echo "全部 8 个任务已完成启动；日志在 ./logs，配置在 ./configs"

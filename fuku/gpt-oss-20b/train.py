@@ -1,5 +1,5 @@
 """
-Phi-4 モデルトレーニングスクリプト
+GPT-OSS-20B モデルトレーニングスクリプト
 """
 
 import os
@@ -40,10 +40,6 @@ class SaveBestMap3Callback(TrainerCallback):
 
     def on_evaluate(self, args, state, control, metrics, model=None, **kwargs):
         current_map3 = metrics.get('eval_map@3', 0.0)
-        current_step = state.global_step
-        total_steps = state.max_steps if state.max_steps else "N/A"
-
-        print(f"\n[Step {current_step}/{total_steps}] 評価実行 - MAP@3スコア: {current_map3:.4f}")
 
         if current_map3 > self.best_map3:
             self.best_map3 = current_map3
@@ -56,28 +52,22 @@ class SaveBestMap3Callback(TrainerCallback):
             model.save_pretrained(best_map3_path)
             self.tokenizer.save_pretrained(best_map3_path)
 
-            print(f"🎉 新しいベストMAP@3スコア更新: {current_map3:.4f} (Step {current_step}) - モデルを {best_map3_path} に保存しました")
-        else:
-            print(f"現在のベストMAP@3スコア: {self.best_map3:.4f} (変更なし)")
+            print(f"\n新しいベストMAP@3スコア: {current_map3:.4f} - モデルを {best_map3_path} に保存しました")
 
         return control
 
 
-class Phi4ForSequenceClassification(nn.Module):
-    """Phi-4モデルを分類タスク用にカスタマイズ"""
-    def __init__(self, model_name, num_labels, attn_implementation="eager"):
+class GPTForSequenceClassification(nn.Module):
+    """GPT-OSS-20Bモデルを分類タスク用にカスタマイズ"""
+    def __init__(self, model_name, num_labels):
         super().__init__()
         from transformers import AutoModel
-        self.phi = AutoModel.from_pretrained(
-            model_name,
-            trust_remote_code=True,
-            attn_implementation=attn_implementation
-        )
+        self.gpt = AutoModel.from_pretrained(model_name, trust_remote_code=True)
         self.dropout = nn.Dropout(0.1)
-        self.classifier = nn.Linear(self.phi.config.hidden_size, num_labels)
+        self.classifier = nn.Linear(self.gpt.config.hidden_size, num_labels)
 
     def forward(self, input_ids, attention_mask=None, labels=None):
-        outputs = self.phi(input_ids=input_ids, attention_mask=attention_mask)
+        outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask)
         # 最後のトークンの隠れ状態を使用
         pooled_output = outputs.last_hidden_state[:, -1, :]
         pooled_output = self.dropout(pooled_output)
@@ -91,6 +81,70 @@ class Phi4ForSequenceClassification(nn.Module):
         return type('Output', (), {'loss': loss, 'logits': logits})()
 
 
+
+def _resolve_lora_target_modules(model, configured_targets):
+    """
+    Determine appropriate LoRA target module names for the given model.
+
+    - If `configured_targets` is a non-empty list, verify they exist; if none
+      match, fall back to automatic detection.
+    - If `configured_targets` is 'auto' or empty/None, automatically detect.
+    """
+    def any_target_matches(targets):
+        hits = set()
+        all_names = [n for n, _ in model.named_modules()]
+        for t in targets or []:
+            for n in all_names:
+                if n.endswith(t) or (t in n.split('.')):
+                    hits.add(t)
+                    break
+        return list(hits)
+
+    # 1) If user specified targets, validate
+    if isinstance(configured_targets, (list, tuple)) and len(configured_targets) > 0:
+        hits = any_target_matches(configured_targets)
+        if len(hits) > 0:
+            print(f"LoRA target modules (validated from config): {hits}")
+            return hits
+        else:
+            print("Warning: Configured LORA_TARGET_MODULES did not match any modules. Falling back to auto-detection.")
+
+    # 2) Auto-detect based on common GPT architectures
+    # Collect suffix names of Linear and GPT-2 Conv1D projection layers
+    suffixes = []
+    for name, module in model.named_modules():
+        cls = type(module).__name__
+        if cls in ("Linear", "Conv1D"):
+            suffixes.append(name.split('.')[-1])
+    # de-duplicate while preserving order
+    seen = set()
+    uniq_suffixes = []
+    for s in suffixes:
+        if s not in seen:
+            seen.add(s)
+            uniq_suffixes.append(s)
+
+    # Prefer common GPT names if present
+    common_gpt_names = [
+        # LLaMA/NeoX style
+        "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+        # GPT-2 style
+        "c_attn", "c_proj", "c_fc",
+    ]
+    detected = [n for n in common_gpt_names if n in uniq_suffixes]
+
+    # Fallback: use all linear-like suffixes, excluding obvious heads
+    if not detected:
+        exclude = {"lm_head", "classifier", "score"}
+        detected = [n for n in uniq_suffixes if n not in exclude]
+
+    # Final safety: ensure non-empty
+    if not detected:
+        # As an ultimate fallback, try to adapt the classifier only to avoid empty set
+        detected = ["classifier"]
+
+    print(f"LoRA target modules (auto-detected): {detected}")
+    return detected
 def main():
     """メイントレーニング関数"""
 
@@ -166,26 +220,29 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
 
     # パディングトークンの設定
-    # Phi-4モデルの場合の設定
+    # GPT-OSS-20Bモデルの場合の設定
     if tokenizer.pad_token is None:
-        # Phi-4では特別なパディングトークンを使用
-        tokenizer.pad_token = "<|finetune_right_pad_id|>"
-        tokenizer.pad_token_id = 100257
+        # 標準的なGPTモデルではeos_tokenをパディングトークンとして使用
+        tokenizer.pad_token = tokenizer.eos_token
 
-    # --- トークン長の分析 ---
-    print("Analyzing token lengths...")
-    lengths = [len(tokenizer.encode(t, truncation=False)) for t in train['text']]
-    plt.figure(figsize=(10, 6))
-    plt.hist(lengths, bins=50)
-    plt.title("Token Length Distribution")
-    plt.xlabel("Number of tokens")
-    plt.ylabel("Frequency")
-    plt.grid(True)
-    plt.savefig(f'{OUTPUT_DIR}/token_length_distribution.png')
-    plt.close()
+    # --- トークン長の分析（任意） ---
+    if ANALYZE_TOKEN_LENGTHS:
+        print("Analyzing token lengths (sampled)...")
+        sample_texts = train['text']
+        if ANALYZE_SAMPLE_SIZE and ANALYZE_SAMPLE_SIZE > 0:
+            sample_texts = sample_texts.sample(n=min(ANALYZE_SAMPLE_SIZE, len(sample_texts)), random_state=RANDOM_SEED)
+        lengths = [len(tokenizer.encode(t, truncation=False)) for t in sample_texts]
+        plt.figure(figsize=(10, 6))
+        plt.hist(lengths, bins=50)
+        plt.title("Token Length Distribution (sample)")
+        plt.xlabel("Number of tokens")
+        plt.ylabel("Frequency")
+        plt.grid(True)
+        plt.savefig(f'{OUTPUT_DIR}/token_length_distribution.png')
+        plt.close()
 
-    over_limit = (np.array(lengths) > MAX_LEN).sum()
-    print(f"There are {over_limit} train sample(s) with more than {MAX_LEN} tokens")
+        over_limit = (np.array(lengths) > MAX_LEN).sum()
+        print(f"There are {over_limit} sampled train sample(s) with more than {MAX_LEN} tokens")
 
     # --- データの分割 ---
     print("Splitting data into train and validation sets...")
@@ -205,7 +262,6 @@ def main():
 
     # --- モデルの初期化 ---
     print("Initializing model...")
-    print(f"Using attention implementation: {ATTENTION_IMPLEMENTATION}")
     try:
         # 量子化モデルを読み込む
         model = AutoModelForSequenceClassification.from_pretrained(
@@ -215,13 +271,13 @@ def main():
             device_map=None,  # デバイスマッピングを無効化
             torch_dtype=torch.bfloat16,  # BF16で読み込み
             low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
-            attn_implementation=ATTENTION_IMPLEMENTATION  # Attention実装を指定
+            attn_implementation=ATTENTION_IMPLEMENTATION  # config.pyで設定したアテンション実装を使用
         )
         # パディングトークンIDを設定
         model.config.pad_token_id = tokenizer.pad_token_id
     except:
         # 失敗した場合はカスタムクラスを使用
-        print("Using custom classification head for Phi-4...")
+        print("Using custom classification head for GPT-OSS-20B...")
         # ベースモデルを読み込む
         base_model = AutoModel.from_pretrained(
             MODEL_NAME,
@@ -229,22 +285,23 @@ def main():
             device_map=None,
             torch_dtype=torch.bfloat16,  # BF16で読み込み
             low_cpu_mem_usage=True,  # CPUメモリ使用量を削減
-            attn_implementation=ATTENTION_IMPLEMENTATION  # Attention実装を指定
+            attn_implementation=ATTENTION_IMPLEMENTATION  # config.pyで設定したアテンション実装を使用
         )
         # カスタム分類ヘッドを作成
-        model = Phi4ForSequenceClassification(MODEL_NAME, n_classes, ATTENTION_IMPLEMENTATION)
-        model.phi = base_model
+        model = GPTForSequenceClassification(MODEL_NAME, n_classes)
+        model.gpt = base_model
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
+    resolved_targets = _resolve_lora_target_modules(model, LORA_TARGET_MODULES)
     lora_config = LoraConfig(
         r=LORA_RANK,  # LoRAのランク
         lora_alpha=LORA_ALPHA,  # LoRAのスケーリングパラメータ
-        target_modules=LORA_TARGET_MODULES,  # 対象モジュール
+        target_modules=resolved_targets,  # 対象モジュール
         lora_dropout=LORA_DROPOUT,
         bias=LORA_BIAS,
         task_type=TaskType.SEQ_CLS,
-        use_dora=USE_DORA  # DoRAの使用
+        use_dora=USE_DORA,  # DoRAの使用設定
     )
 
     # PEFTモデルの作成
@@ -289,7 +346,8 @@ def main():
         greater_is_better=True,
         load_best_model_at_end=True,
         report_to="wandb" if USE_WANDB else "none",
-        bf16=True,  # BF16を使用
+        bf16=BF16,  # BF16を使用
+        fp16=FP16,  # FP16は使用しない
         gradient_checkpointing=True,  # メモリ効率化のため有効化
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない
@@ -298,6 +356,7 @@ def main():
         save_total_limit=2,
         max_grad_norm=MAX_GRAD_NORM,  # Gradient clipping
         optim="adamw_bnb_8bit" if USE_8BIT_ADAM else "adamw_torch",  # 8-bit Adam optimizer
+        dataloader_num_workers=DATALOADER_NUM_WORKERS,
     )
 
     # --- トレーナーのセットアップとトレーニング ---
@@ -351,25 +410,10 @@ def main():
     print("Starting training...")
     trainer.train()
 
-    # --- トレーニング終了後の最終評価 ---
-    print("\n" + "="*60)
-    print("トレーニング完了 - 最終評価を実行中...")
-    print("="*60)
-    final_eval_results = trainer.evaluate()
-    final_map3 = final_eval_results.get('eval_map@3', 0.0)
-    print(f"\n🏁 最終評価結果:")
-    print(f"   最終MAP@3スコア: {final_map3:.4f}")
-    print(f"   全体のベストMAP@3スコア: {save_best_callback.best_map3:.4f}")
-
-    # 最終評価が新しいベストスコアの場合、明示的に保存
-    if final_map3 > save_best_callback.best_map3:
-        print(f"🎉 最終評価で新しいベストスコア達成！ {final_map3:.4f} > {save_best_callback.best_map3:.4f}")
-        save_best_callback.best_map3 = final_map3
-        best_map3_path = os.path.join(OUTPUT_DIR, 'best_map3')
-        os.makedirs(best_map3_path, exist_ok=True)
-        model.save_pretrained(best_map3_path)
-        tokenizer.save_pretrained(best_map3_path)
-        print(f"   最終ベストモデルを {best_map3_path} に保存しました")
+    # --- 最終的なMAP@3スコアを表示 ---
+    print("\nEvaluating on validation set...")
+    eval_results = trainer.evaluate()
+    print(f"\nValidation MAP@3: {eval_results.get('eval_map@3', 'N/A'):.4f}")
 
     # --- モデルの保存 ---
     print("\nSaving model...")

@@ -1,5 +1,6 @@
 """
-Gemma-3-1B モデルトレーニングスクリプト
+LLM モデル（Gemma / Phi 等）による分類トレーニングスクリプト
+与えられた config の各種設定（LoRA, 早期終了, 8bit Optim, Attention 実装 等）に対応
 """
 
 import os
@@ -9,24 +10,25 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from transformers import (
-    AutoModelForSequenceClassification,
     AutoTokenizer,
     TrainingArguments,
     Trainer,
-    AutoConfig
+    AutoConfig,
+    AutoModelForSequenceClassification,
 )
 from datasets import Dataset
 import joblib
 import torch
 import torch.nn as nn
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
-from transformers import AutoModel, AutoModelForCausalLM
+from transformers import AutoModel
 import wandb
 from transformers import EarlyStoppingCallback, TrainerCallback
 
 # カスタムモジュールのインポート
 from config import *
-from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3
+from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3, pool_last_token
+from helpers import detect_classifier_modules_to_save
 from data_collator import DataCollatorWithPadding
 
 
@@ -58,32 +60,46 @@ class SaveBestMap3Callback(TrainerCallback):
         return control
 
 
-class GemmaForSequenceClassification(nn.Module):
-    """Gemmaモデルを分類タスク用にカスタマイズ"""
-    def __init__(self, model_name, num_labels):
+class LLMForSequenceClassification(nn.Module):
+    """
+    旧: Gemma3ForCausalLM + 線形ヘッドのカスタム分類器。
+    現在は submit.py と完全互換を保つため、AutoModelForSequenceClassification を優先して使用する。
+    本クラスは後方互換のために残すが、デフォルトでは使用しない。
+    """
+    def __init__(self, model_name, num_labels, attn_implementation=None, torch_dtype=None):
         super().__init__()
         from transformers import AutoModelForCausalLM
-        self.gemma = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
-        self.config = self.gemma.config  # configをインスタンス変数として保持
+        base_kwargs = {
+            "trust_remote_code": True,
+        }
+        if attn_implementation is not None:
+            base_kwargs["attn_implementation"] = attn_implementation
+        if torch_dtype is not None:
+            base_kwargs["torch_dtype"] = torch_dtype
+
+        # 互換確保のための簡易バックボーン
+        self.backbone = AutoModelForCausalLM.from_pretrained(model_name, **base_kwargs)
+        self.config = self.backbone.config
+        hidden_size = self.config.text_config.hidden_size if hasattr(self.config, 'text_config') else getattr(self.config, 'hidden_size', None)
+        if hidden_size is None:
+            raise ValueError("Could not determine hidden_size for custom classifier.")
         self.dropout = nn.Dropout(0.1)
-        # Gemma3の場合はtext_configからhidden_sizeを取得
-        hidden_size = self.config.text_config.hidden_size if hasattr(self.config, 'text_config') else self.config.hidden_size
         self.classifier = nn.Linear(hidden_size, num_labels)
 
     def forward(self, input_ids=None, attention_mask=None, inputs_embeds=None, labels=None, **kwargs):
-        # input_ids または inputs_embeds のいずれかが必要
-        if input_ids is None and inputs_embeds is None:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
-
-        outputs = self.gemma(
+        outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
-            output_hidden_states=True
+            output_hidden_states=True,
+            return_dict=True,
         )
-        # 最後のトークンの隠れ状態を使用
         hidden_states = outputs.hidden_states[-1] if hasattr(outputs, 'hidden_states') else outputs.last_hidden_state
-        pooled_output = hidden_states[:, -1, :]
+        # padを除いた最後のトークンでプーリング
+        if attention_mask is None:
+            pooled_output = hidden_states[:, -1, :]
+        else:
+            pooled_output = pool_last_token(hidden_states, attention_mask)
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
 
@@ -91,12 +107,44 @@ class GemmaForSequenceClassification(nn.Module):
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+        return {"loss": loss, "logits": logits} if loss is not None else {"logits": logits}
 
-        # 辞書形式で返す（Transformersが期待する形式）
-        if loss is not None:
-            return {'loss': loss, 'logits': logits}
-        else:
-            return {'logits': logits}
+    # 互換性のための委譲メソッド群（TrainerやPEFTが直接呼び出すことがある）
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None, **kwargs):
+        """backbone へ安全に委譲して勾配チェックポイントを有効化"""
+        target = getattr(self, "backbone", None)
+        if target is not None and hasattr(target, "gradient_checkpointing_enable"):
+            try:
+                if gradient_checkpointing_kwargs is not None:
+                    return target.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
+                return target.gradient_checkpointing_enable()
+            except TypeError:
+                # 引数仕様が異なる古いTransformersへのフォールバック
+                return target.gradient_checkpointing_enable()
+        # 未対応モデルの場合は無視（Trainer側からの呼び出しでAttributeErrorを避ける）
+        print("Gradient checkpointing not supported on backbone; skipping enable.")
+
+    def gradient_checkpointing_disable(self):
+        """backbone へ安全に委譲して勾配チェックポイントを無効化"""
+        target = getattr(self, "backbone", None)
+        if target is not None and hasattr(target, "gradient_checkpointing_disable"):
+            try:
+                return target.gradient_checkpointing_disable()
+            except Exception:
+                pass
+        # 未対応でも例外は投げない
+        print("Gradient checkpointing not supported on backbone; skipping disable.")
+
+    def enable_input_require_grads(self):
+        """inputにrequires_gradを付与（勾配チェックポイント利用時の推奨設定）"""
+        target = getattr(self, "backbone", None)
+        if target is not None and hasattr(target, "enable_input_require_grads"):
+            try:
+                return target.enable_input_require_grads()
+            except Exception:
+                pass
+        # 最低限のフォールバック：埋め込み層入力に勾配を要求するフックがなければ何もしない
+        print("enable_input_require_grads not supported on backbone; skipping.")
 
 
 def main():
@@ -117,10 +165,14 @@ def main():
                 "learning_rate": LEARNING_RATE,
                 "early_stopping_patience": EARLY_STOPPING_PATIENCE if USE_EARLY_STOPPING else None,
                 "early_stopping_threshold": EARLY_STOPPING_THRESHOLD if USE_EARLY_STOPPING else None,
-                "lora_r": LORA_R,
+                "lora_r": (globals().get("LORA_R", globals().get("LORA_RANK", None))),
                 "lora_alpha": LORA_ALPHA,
                 "lora_dropout": LORA_DROPOUT,
                 "lora_target_modules": LORA_TARGET_MODULES,
+                "use_dora": globals().get("USE_DORA", False),
+                "attn_implementation": globals().get("ATTENTION_IMPLEMENTATION", None),
+                "use_8bit_adam": globals().get("USE_8BIT_ADAM", False),
+                "max_grad_norm": globals().get("MAX_GRAD_NORM", None),
             }
         )
 
@@ -198,50 +250,126 @@ def main():
 
     # --- モデルの初期化 ---
     print("Initializing model...")
+    # attention implementation / dtype 設定
+    attn_impl = globals().get("ATTENTION_IMPLEMENTATION", None)
+    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
+    base_model_kwargs = {
+        "trust_remote_code": True,
+        "device_map": None,
+        "torch_dtype": dtype,
+        "low_cpu_mem_usage": True,
+    }
+    if attn_impl:
+        base_model_kwargs["attn_implementation"] = attn_impl
+
+    # Gemma系はCausalLMチェックポイント（会話用）で提供されるため、
+    # SequenceClassificationに直接ロードすると大半の重みが未初期化になる問題がある。
+    # そのためCausalLMバックボーン＋線形分類ヘッドで学習する。
+    print("Using AutoModelForCausalLM backbone + linear classifier head.")
+    model = LLMForSequenceClassification(
+        model_name=MODEL_NAME,
+        num_labels=n_classes,
+        attn_implementation=attn_impl,
+        torch_dtype=dtype,
+    )
+    # tokenizerのpad_tokenを学習時のconfigにも反映（あれば）
     try:
-        # Gemmaモデルの分類モデルを読み込む
-        model = AutoModelForSequenceClassification.from_pretrained(
-            MODEL_NAME,
-            num_labels=n_classes,
-            trust_remote_code=True,
-            device_map=None,  # デバイスマッピングを無効化
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
-        )
-        # パディングトークンIDを設定
-        model.config.pad_token_id = tokenizer.pad_token_id
-    except:
-        # 失敗した場合はカスタムクラスを使用
-        print("Using custom classification head for Gemma...")
-        # ベースモデルを読み込む（Gemmaの場合はCausalLMモデルを使用）
-        base_model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            trust_remote_code=True,
-            device_map=None,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
-        )
-        # カスタム分類ヘッドを作成
-        model = GemmaForSequenceClassification(MODEL_NAME, n_classes)
-        model.gemma = base_model
+        if hasattr(model, "config"):
+            model.config.pad_token_id = tokenizer.pad_token_id
+    except Exception:
+        pass
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
-    lora_config = LoraConfig(
-        r=LORA_R,  # LoRAのランク
-        lora_alpha=LORA_ALPHA,  # LoRAのスケーリングパラメータ
-        target_modules=LORA_TARGET_MODULES,  # Gemma用の対象モジュール
-        lora_dropout=LORA_DROPOUT,
-        bias=LORA_BIAS,
-        task_type=TaskType.SEQ_CLS,
-    )
+    # LORA_R と LORA_RANK の両方に対応
+    LORA_R_EFFECTIVE = globals().get("LORA_R", globals().get("LORA_RANK", 16))
+
+    # submit.py でベースモデルに適用後も分類ヘッドを再現できるよう、
+    # 分類ヘッド名を自動検出して modules_to_save に含める
+    modules_to_save = detect_classifier_modules_to_save(model)
+    if len(modules_to_save) > 0:
+        print(f"Detected classifier head(s) to save with adapter: {modules_to_save}")
+    else:
+        print("No explicit classifier head detected; proceeding without modules_to_save.")
+
+    try:
+        lora_config = LoraConfig(
+            r=LORA_R_EFFECTIVE,
+            lora_alpha=LORA_ALPHA,
+            target_modules=LORA_TARGET_MODULES,
+            lora_dropout=LORA_DROPOUT,
+            bias=LORA_BIAS,
+            task_type=TaskType.SEQ_CLS,
+            use_dora=globals().get("USE_DORA", False),
+            modules_to_save=modules_to_save if len(modules_to_save) > 0 else None,
+        )
+    except TypeError:
+        # 古い peft で use_dora/modules_to_save 未対応の場合
+        lora_config = LoraConfig(
+            r=LORA_R_EFFECTIVE,
+            lora_alpha=LORA_ALPHA,
+            target_modules=LORA_TARGET_MODULES,
+            lora_dropout=LORA_DROPOUT,
+            bias=LORA_BIAS,
+            task_type=TaskType.SEQ_CLS,
+        )
 
     # PEFTモデルの作成
     model = get_peft_model(model, lora_config)
     print("Number of trainable parameters:")
     model.print_trainable_parameters()
 
+    # Gradient checkpointing note:
+    # When using LoRA with gradient checkpointing, PyTorch may warn that
+    # "None of the inputs have requires_grad=True" if inputs are not set to
+    # require grads. Enabling input requires grad avoids the warning and ensures
+    # correct checkpoint behavior with frozen base weights.
+    if globals().get("USE_GRADIENT_CHECKPOINTING", False):
+        # AutoModelForSequenceClassification は input_require_grads を持たないことが多いため、存在チェック
+        try:
+            if hasattr(model, 'enable_input_require_grads'):
+                model.enable_input_require_grads()
+                print("Enabled input requires grad for gradient checkpointing.")
+        except Exception as e:
+            print(f"Could not enable input requires grads: {e}")
+        # Prefer non-reentrant checkpointing when available; fall back gracefully
+        try:
+            if hasattr(model, 'gradient_checkpointing_enable'):
+                model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            else:
+                base = getattr(model, 'base_model', None)
+                target = base if base is not None else model
+                if hasattr(target, 'gradient_checkpointing_enable'):
+                    target.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+                else:
+                    print("Gradient checkpointing not supported on this model; skipping.")
+            print("Enabled gradient checkpointing with use_reentrant=False.")
+        except Exception as e:
+            try:
+                if hasattr(model, 'gradient_checkpointing_enable'):
+                    model.gradient_checkpointing_enable()
+                else:
+                    base = getattr(model, 'base_model', None)
+                    target = base if base is not None else model
+                    if hasattr(target, 'gradient_checkpointing_enable'):
+                        target.gradient_checkpointing_enable()
+                    else:
+                        raise e
+                print("Enabled gradient checkpointing.")
+            except Exception as e2:
+                print(f"Could not enable gradient checkpointing on model: {e2}")
+
     # シングルGPUに設定
     if torch.cuda.is_available():
         model = model.cuda()
+
+    # --- Optimizer 選択（8bit Adam に対応） ---
+    import importlib.util as _importlib_util
+    _bnb_spec = _importlib_util.find_spec("bitsandbytes")
+    _use_8bit = bool(globals().get("USE_8BIT_ADAM", False) and _bnb_spec is not None)
+    if globals().get("USE_8BIT_ADAM", False) and _bnb_spec is None:
+        print("bitsandbytes not found; falling back to adamw_torch instead of 8-bit Adam.")
 
     # --- トレーニング引数の設定 ---
     training_args = TrainingArguments(
@@ -263,12 +391,14 @@ def main():
         greater_is_better=True,
         load_best_model_at_end=True,
         report_to="wandb" if USE_WANDB else "none",
-        bf16=True,  # RTX 5090の互換性問題のため一時的にFalse
-        gradient_checkpointing=False,  # インデックスエラーのため一時的に無効化
+        bf16=torch.cuda.is_available(),
+        gradient_checkpointing=globals().get("USE_GRADIENT_CHECKPOINTING", False),
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない
         lr_scheduler_type="cosine",  # コサインスケジューラーを使用
         warmup_ratio=0.0,  # ウォームアップを無効化
+        optim=("adamw_bnb_8bit" if _use_8bit else "adamw_torch"),
+        max_grad_norm=globals().get("MAX_GRAD_NORM", 1.0),
     )
 
     # --- トレーナーのセットアップとトレーニング ---
