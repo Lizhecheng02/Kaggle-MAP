@@ -4,7 +4,7 @@
 
 # Model configuration
 VER = 2
-MODEL_NAME = "/kaggle/input/gemma-2-9b-it"
+MODEL_NAME = "/hdd/models/gemma-2-9b-it"
 MODEL_TYPE = "gemma2"  # Add model type for proper handling
 EPOCHS = 3  # Reduce epochs for initial testing
 MAX_LEN = 300  # Increase max length for better context
@@ -13,9 +13,9 @@ MAX_LEN = 300  # Increase max length for better context
 OUTPUT_DIR = f"ver_{VER}"
 
 # Training parameters
-TRAIN_BATCH_SIZE = 16  # Further reduced to avoid CUDA errors
-EVAL_BATCH_SIZE = 16  # Further reduced to avoid CUDA errors
-GRADIENT_ACCUMULATION_STEPS=2
+TRAIN_BATCH_SIZE = 4  # Further reduced to avoid CUDA errors
+EVAL_BATCH_SIZE = 4  # Further reduced to avoid CUDA errors
+GRADIENT_ACCUMULATION_STEPS=16
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 50
 SAVE_STEPS = 200
@@ -51,8 +51,18 @@ EARLY_STOPPING_PATIENCE = 10  # Number of evaluations with no improvement after 
 EARLY_STOPPING_THRESHOLD = 0.001  # Minimum change in the monitored metric to qualify as an improvement
 
 # LoRA configuration
-LORA_R = 64  # LoRAのランク
-LORA_ALPHA = 128  # LoRAのスケーリングパラメータ
+LORA_R = 512  # LoRAのランク
+LORA_ALPHA = 512  # LoRAのスケーリングパラメータ
 LORA_TARGET_MODULES = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  # Gemma用の対象モジュール
 LORA_DROPOUT = 0.1  # LoRAのドロップアウト率
 LORA_BIAS = "none"  # バイアスの設定
+
+# 精度設定（bf16学習を有効化）
+# 変数はハードコードせず設定ファイルで管理
+USE_BF16 = True
+USE_FP16 = False
+
+# メモリ節約設定
+# 勾配チェックポイントはメモリを大幅に削減できますが、モデルや入力によっては
+# 例外が発生することがあるため、設定から有効/無効を切り替え可能にします。
+USE_GRADIENT_CHECKPOINTING = True

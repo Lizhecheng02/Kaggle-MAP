@@ -13,6 +13,7 @@ from transformers import (
 from datasets import Dataset
 import joblib
 import torch
+import gc
 # PEFTのインポートをオプショナルにする
 try:
     from peft import PeftModel, PeftConfig
@@ -31,6 +32,18 @@ from utils import prepare_correct_answers, format_input, tokenize_dataset, creat
 
 def main():
     """メイン推論関数"""
+    
+    # メモリキャッシュをクリア
+    torch.cuda.empty_cache()
+    gc.collect()
+    
+    # CUDAメモリ管理の最適化
+    import os
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    
+    # 2つのGPUを使用可能にする
+    if torch.cuda.device_count() > 1:
+        print(f"Found {torch.cuda.device_count()} GPUs")
 
     print("Loading label encoder...")
     # ラベルエンコーダーの読み込み
@@ -44,16 +57,31 @@ def main():
         print(f"Loading fine-tuned LoRA model from: {BEST_MODEL_PATH}")
         print(f"Loading base model from: {MODEL_NAME}")
 
-        # ベースモデルを読み込む（device_map="auto"で自動的にGPU分散）
+        # ベースモデルを読み込む（8bit量子化で読み込み）
+        from transformers import BitsAndBytesConfig
+        
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+            bnb_8bit_compute_dtype=torch.float16,
+            bnb_8bit_use_double_quant=True,
+            bnb_8bit_quant_type="nf4"
+        )
+        
         model = AutoModelForSequenceClassification.from_pretrained(
             MODEL_NAME,
             num_labels=n_classes,
             trust_remote_code=True,
-            device_map="auto"
+            quantization_config=quantization_config,
+            device_map="auto",  # 自動的に複数GPUに分散
+            low_cpu_mem_usage=True  # CPUメモリ使用量を削減
         )
 
         # LoRAアダプターを適用
         model = PeftModel.from_pretrained(model, BEST_MODEL_PATH)
+        
+        # 推論モードに設定（メモリ効率化）
+        model.eval()
+        # 8bit量子化モデルは既にGPUに配置されているのでto('cuda')は不要
 
         # トークナイザーはベースモデルから読み込む
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
@@ -66,7 +94,7 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
-
+    
     # モデルの設定を更新（PeftModelのbase_modelにアクセス）
     if hasattr(model, 'base_model'):
         model.base_model.config.pad_token_id = tokenizer.pad_token_id
@@ -101,6 +129,11 @@ def main():
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
     print("Running inference...")
+    
+    # TF32を有効化（推論速度向上）
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    
     # 推論の実行
     trainer = Trainer(
         model=model,
@@ -110,10 +143,14 @@ def main():
             output_dir="./tmp",  # 一時ディレクトリ（必須パラメータ）
             report_to="none",    # wandbを無効化
             per_device_eval_batch_size=EVAL_BATCH_SIZE,  # 設定ファイルから取得
-            fp16=True,  # メモリ効率のため追加
+            fp16=True,  # float16を使用
+            dataloader_pin_memory=True,  # データローダーの高速化
+            dataloader_num_workers=2,  # データ読み込みの並列化
         )
     )
-    predictions = trainer.predict(ds_test)
+    # no_gradコンテキストで推論を実行（メモリ効率化）
+    with torch.no_grad():
+        predictions = trainer.predict(ds_test)
 
     print("Creating submission file...")
     # 提出用ファイルの作成
