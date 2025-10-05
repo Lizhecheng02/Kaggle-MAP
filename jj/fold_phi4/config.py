@@ -19,10 +19,10 @@ class Config:
     TEST_DATA_PATH: str = "../../input/map-charting-student-math-misunderstandings/test.csv"
     INFERENCE_DATA_PATH: str = "../outputs/train_fold.parquet"
     FOLDS: int = 5    
-    MAX_LEN: int = 1024
+    MAX_LEN: int = 512
 
     # Prompt
-    PROMPT_VERSION: str = "create_prompt_v2"
+    PROMPT_VERSION: str = "create_prompt_v1"
     
     # LoRA configurations
     LORA_RANK: int = 64
@@ -41,15 +41,15 @@ class Config:
     USE_DORA: bool = False
 
     # Training parameters
-    EPOCHS: int = 3
+    EPOCHS: int = 4
     TRAIN_BATCH_SIZE: int = 32
     EVAL_BATCH_SIZE: int = 32
     GRADIENT_ACCUMULATION_STEPS: int = 2
-    LEARNING_RATE: float = 2e-4
+    LEARNING_RATE: float = 1e-4
     LOGGING_STEPS: int = 10
-    SAVE_STEPS: int = 90
-    EVAL_STEPS: int = 90
-    LABEL_SMOOTHING_FACTOR: float = 0.0
+    SAVE_STEPS: int = 100
+    EVAL_STEPS: int = 100
+    LABEL_SMOOTHING_FACTOR: float = 0.05
     TRAIN_FULL_DATA: bool = False
     WARM_UP: float = 0.0
     

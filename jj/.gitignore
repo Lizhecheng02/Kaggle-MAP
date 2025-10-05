@@ -6,6 +6,15 @@ wandb/
 *.parquet
 *.ipynb
 map_*
+*/model/*
+*/models/*
+*/map_*_ver*_seed_*/*
+*/ver_*_fold*/*
+*/ver_*
+*.zip
+*.joblib
+*.sh
+*.csv
 
 .vscode/
 

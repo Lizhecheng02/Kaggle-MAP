@@ -59,11 +59,40 @@ class SaveBestMap3Callback(TrainerCallback):
 
 
 class GemmaForSequenceClassification(nn.Module):
-    """Gemmaモデルを分類タスク用にカスタマイズ"""
-    def __init__(self, model_name, num_labels):
+    """Gemmaモデルを分類タスク用にカスタマイズ
+
+    メモリ効率のため、base_model が与えられた場合は内部で from_pretrained を呼ばない。
+    これにより FP32 での意図しない一時ロードを回避し、OOM を防止する。
+    """
+    def __init__(
+        self,
+        model_name,
+        num_labels,
+        base_model=None,
+        torch_dtype=None,
+        device_map=None,
+        quantization_config=None,
+        trust_remote_code=True,
+    ):
         super().__init__()
-        from transformers import AutoModelForCausalLM
-        self.gemma = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
+
+        if base_model is not None:
+            # 既に構築済みのベースモデルを受け取り、重複ロードを避ける
+            self.gemma = base_model
+        else:
+            # 必要な場合のみロード。dtype/device_map/量子化設定を受け取り可能
+            from transformers import AutoModelForCausalLM
+
+            load_kwargs = {"trust_remote_code": trust_remote_code}
+            if torch_dtype is not None:
+                load_kwargs["torch_dtype"] = torch_dtype
+            if device_map is not None:
+                load_kwargs["device_map"] = device_map
+            if quantization_config is not None:
+                load_kwargs["quantization_config"] = quantization_config
+
+            self.gemma = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
+
         self.config = self.gemma.config  # configをインスタンス変数として保持
         self.dropout = nn.Dropout(0.1)
         # Gemma2の場合は直接hidden_sizeを取得
@@ -79,10 +108,9 @@ class GemmaForSequenceClassification(nn.Module):
             input_ids=input_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
-            output_hidden_states=True
         )
-        # 最後のトークンの隠れ状態を使用
-        hidden_states = outputs.hidden_states[-1] if hasattr(outputs, 'hidden_states') else outputs.last_hidden_state
+        # 最後のトークンの隠れ状態を使用（全層のhidden_statesは取得しない）
+        hidden_states = outputs.last_hidden_state
         pooled_output = hidden_states[:, -1, :]
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
@@ -97,6 +125,22 @@ class GemmaForSequenceClassification(nn.Module):
             return {'loss': loss, 'logits': logits}
         else:
             return {'logits': logits}
+
+
+def _detect_awq_modules(model: nn.Module) -> bool:
+    """AWQ量子化レイヤの存在を簡易検出。
+
+    - AutoAWQ 環境では線形層が WQLinear* などのクラス名になることがある。
+    - 学習用途には非推奨なため、検出した場合は警告を出す。
+    """
+    try:
+        for m in model.modules():
+            name = type(m).__name__.lower()
+            if 'wqlinear' in name or 'awq' in name:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def main():
@@ -198,6 +242,17 @@ def main():
 
     # --- モデルの初期化 ---
     print("Initializing model...")
+    # 設定に基づくdtype（FP32フォールバックは廃止）
+    dtype_for_model = (
+        torch.bfloat16 if (torch.cuda.is_available() and USE_BF16) else (
+            torch.float16 if (torch.cuda.is_available() and USE_FP16) else None
+        )
+    )
+    if dtype_for_model is None:
+        raise RuntimeError(
+            "No BF16/FP16 enabled or CUDA unavailable. FP32 fallback is disabled.\n"
+            "Enable USE_BF16 or USE_FP16 with a CUDA-capable device."
+        )
     try:
         # Gemmaモデルの分類モデルを読み込む
         model = AutoModelForSequenceClassification.from_pretrained(
@@ -205,10 +260,12 @@ def main():
             num_labels=n_classes,
             trust_remote_code=True,
             device_map=None,  # デバイスマッピングを無効化
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
+            torch_dtype=dtype_for_model
         )
         # パディングトークンIDを設定
         model.config.pad_token_id = tokenizer.pad_token_id
+        # 余計なキャッシュを保持しない
+        model.config.use_cache = False
     except:
         # 失敗した場合はカスタムクラスを使用
         print("Using custom classification head for Gemma...")
@@ -217,11 +274,20 @@ def main():
             MODEL_NAME,
             trust_remote_code=True,
             device_map=None,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
+            torch_dtype=dtype_for_model
         )
         # カスタム分類ヘッドを作成
-        model = GemmaForSequenceClassification(MODEL_NAME, n_classes)
-        model.gemma = base_model
+        model = GemmaForSequenceClassification(
+            MODEL_NAME,
+            n_classes,
+            base_model=base_model,
+            torch_dtype=dtype_for_model,
+            device_map=None,
+        )
+        # pad_token_id を確実に設定
+        model.config.pad_token_id = tokenizer.pad_token_id
+        # 余計なキャッシュを保持しない
+        model.config.use_cache = False
 
     # --- LoRAアダプターの設定 ---
     print("Configuring LoRA adapter...")
@@ -239,9 +305,28 @@ def main():
     print("Number of trainable parameters:")
     model.print_trainable_parameters()
 
+    # 勾配チェックポイント利用時に入力に勾配を要求（LoRA + 量子化/凍結下で必須）
+    if USE_GRADIENT_CHECKPOINTING:
+        if hasattr(model, 'gradient_checkpointing_enable'):
+            try:
+                model.gradient_checkpointing_enable()
+            except Exception:
+                pass
+        if hasattr(model, 'enable_input_require_grads'):
+            try:
+                model.enable_input_require_grads()
+            except Exception:
+                pass
+
     # シングルGPUに設定
     if torch.cuda.is_available():
         model = model.cuda()
+
+    # AWQ量子化モデルを検出したら警告（学習非推奨）
+    if _detect_awq_modules(model):
+        print("\n[WARNING] Detected AWQ-quantized layers in the loaded model.")
+        print("          AWQ は推論向け量子化であり学習には適しません。")
+        print("          学習には BF16/FP16 の元ウェイト、または QLoRA (bitsandbytes) をご利用ください。")
 
     # --- トレーニング引数の設定 ---
     training_args = TrainingArguments(
@@ -263,8 +348,9 @@ def main():
         greater_is_better=True,
         load_best_model_at_end=True,
         report_to="wandb" if USE_WANDB else "none",
-        bf16=True,  # Gemma-2では推奨
-        gradient_checkpointing=False,  # インデックスエラーのため一時的に無効化
+        bf16=USE_BF16,  # 設定ファイルで制御
+        fp16=USE_FP16,
+        gradient_checkpointing=USE_GRADIENT_CHECKPOINTING,  # 設定で制御
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,  # メモリ効率向上のため追加
         remove_unused_columns=False,  # カラムを削除しない
         lr_scheduler_type="cosine",  # コサインスケジューラーを使用

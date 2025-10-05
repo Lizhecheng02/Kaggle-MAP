@@ -65,14 +65,14 @@ def main():
         from transformers import AutoModelForCausalLM
 
         class GemmaForSequenceClassificationOptimized(nn.Module):
-            def __init__(self, model_name, num_labels):
+            def __init__(self, model_name, num_labels, dtype):
                 super().__init__()
                 # device_mapを使って自動的に複数GPUに分散
                 # Gemma2モデルを読み込む
                 self.gemma = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     trust_remote_code=True,
-                    torch_dtype=torch.bfloat16,  # bfloat16で読み込み（Gemma-2推奨）
+                    torch_dtype=dtype,  # 設定フラグに基づく精度（bf16/fp16/fp32）
                     device_map="auto",  # 自動的に複数GPUに分散
                     low_cpu_mem_usage=True  # CPUメモリ使用量を削減
                 )
@@ -85,8 +85,9 @@ def main():
                 nn.init.normal_(self.classifier.weight, mean=0.0, std=0.02)
                 if self.classifier.bias is not None:
                     nn.init.zeros_(self.classifier.bias)
-                # 分類器もbfloat16に変換
-                self.classifier = self.classifier.bfloat16()
+                # 分類器も指定dtypeに変換（必要時）
+                if dtype in (torch.bfloat16, torch.float16):
+                    self.classifier = self.classifier.to(dtype)
 
             def forward(self, input_ids=None, attention_mask=None, inputs_embeds=None, labels=None, **kwargs):
                 if input_ids is None and inputs_embeds is None:
@@ -159,8 +160,19 @@ def main():
         peft_config = PeftConfig.from_pretrained(BEST_MODEL_PATH)
         print(f"LoRA adapter expects base model: {peft_config.base_model_name_or_path}")
 
+        # 精度（dtype）を設定フラグに基づき選択（FP32フォールバックは廃止）
+        dtype = (
+            torch.bfloat16 if (torch.cuda.is_available() and USE_BF16) else (
+                torch.float16 if (torch.cuda.is_available() and USE_FP16) else None
+            )
+        )
+        if dtype is None:
+            raise RuntimeError(
+                "No BF16/FP16 enabled or CUDA unavailable. FP32 fallback is disabled.\n"
+                "Enable USE_BF16 or USE_FP16 with a CUDA-capable device."
+            )
         # 最適化されたモデルを使用
-        model = GemmaForSequenceClassificationOptimized(MODEL_NAME, num_labels=n_classes)
+        model = GemmaForSequenceClassificationOptimized(MODEL_NAME, num_labels=n_classes, dtype=dtype)
 
         # LoRAアダプターを適用前に、classifierの重みを保存された重みで置き換える必要がある
         # まず、保存されたチェックポイントから分類器の重みを読み込む
@@ -178,9 +190,13 @@ def main():
                 if classifier_weight_key in f.keys():
                     print(f"Loading classifier weights from safetensors")
                     # classifierの重みを設定（bfloat16で保持）
-                    model.classifier.weight.data = f.get_tensor(classifier_weight_key).to(model.classifier.weight.device).bfloat16()
+                    model.classifier.weight.data = f.get_tensor(classifier_weight_key).to(
+                        model.classifier.weight.device, dtype=model.classifier.weight.dtype
+                    )
                     if classifier_bias_key in f.keys():
-                        model.classifier.bias.data = f.get_tensor(classifier_bias_key).to(model.classifier.bias.device).bfloat16()
+                        model.classifier.bias.data = f.get_tensor(classifier_bias_key).to(
+                            model.classifier.bias.device, dtype=model.classifier.bias.dtype
+                        )
                     print(f"Classifier weights loaded successfully")
 
         # LoRAアダプターを適用 - is_trainable=Falseを追加

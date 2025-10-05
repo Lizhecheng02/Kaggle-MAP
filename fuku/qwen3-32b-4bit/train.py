@@ -28,7 +28,7 @@ import gc
 
 # カスタムモジュールのインポート
 from config import *
-from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3
+from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3, process_targets
 from data_collator import DataCollatorWithPadding
 
 
@@ -132,8 +132,10 @@ def main():
     print("Loading and preprocessing training data...")
     le = LabelEncoder()
     train = pd.read_csv(TRAIN_DATA_PATH)
-    train.Misconception = train.Misconception.fillna('NA')
-    train['target'] = train.Category + ":" + train.Misconception
+    # 欠損埋めとターゲット作成（LabelEncoder適用前に実施）
+    from config import TARGET_MISCONCEPTION_COL, TARGET_MISCONCEPTION_FILLNA_VALUE
+    train[TARGET_MISCONCEPTION_COL] = train[TARGET_MISCONCEPTION_COL].fillna(TARGET_MISCONCEPTION_FILLNA_VALUE)
+    train['target'] = train.apply(lambda x: process_targets(x), axis=1)
     train['label'] = le.fit_transform(train['target'])
     n_classes = len(le.classes_)
     print(f"Train shape: {train.shape} with {n_classes} target classes")
