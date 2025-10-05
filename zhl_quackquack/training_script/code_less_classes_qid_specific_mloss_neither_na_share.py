@@ -373,7 +373,15 @@ def main():
     )
     print(qid2labels)
 
-    train_df['text'] = train_df.apply(format_input, axis=1)
+    # train_df['text'] = train_df.apply(format_input, axis=1)
+    train_df['text'] = train_df.apply(format_input_v2, axis=1)
+
+    # # Compute tokenized lengths
+    # train_df["text_len"] = train_df["text"].apply(lambda x: len(tokenizer.encode(x)))
+
+    # # Sort and display top 10 longest samples
+    # top10 = train_df.sort_values("text_len", ascending=False).head(10)[["text_len", "text"]]
+    # print(top10[["text_len"]])
 
     skf = StratifiedKFold(n_splits=args.cv_fold, shuffle=True, random_state=args.cv_seed)
     fold_indices = list(skf.split(train_df, train_df['split_key']))
@@ -392,8 +400,6 @@ def main():
         gc.collect()
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
-
-        joblib.dump(le, f"{DIR}/fold_{fold}/label_encoder.joblib")
 
         tr, va = train_df.iloc[tr_idx].copy(), train_df.iloc[va_idx].copy()
         if DO_FULL_TRAIN:
@@ -438,6 +444,7 @@ def main():
 
         output_fold_dir = f"{DIR}/fold_{fold}"
         os.makedirs(output_fold_dir, exist_ok=True)
+        joblib.dump(le, f"{DIR}/fold_{fold}/label_encoder.joblib")
 
         if not DO_FULL_TRAIN:
             compute_metrics = make_compute_map3(va, le, qid2labels)
