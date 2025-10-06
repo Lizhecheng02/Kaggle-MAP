@@ -4,7 +4,7 @@
 
 # Model configuration
 VER = "4bit"
-MODEL_NAME = "/hdd/models/Qwen2.5-32B-Instruct"
+MODEL_NAME = "/kaggle/input/models/Qwen2.5-32B-Instruct"
 MODEL_TYPE = "qwen2"  # Qwen2.5 uses qwen2 architecture
 EPOCHS = 3  # Reduce epochs for initial testing
 MAX_LEN = 300  # Increase max length for better context
@@ -50,6 +50,10 @@ WANDB_ENTITY = None  # Set your WandB entity (username or team name) if needed
 USE_EARLY_STOPPING = True
 EARLY_STOPPING_PATIENCE = 10  # 改善が見られない評価回数の上限（評価はEVAL_STEPSごとに実行される）
 EARLY_STOPPING_THRESHOLD = 0.001  # 改善とみなす最小変化量
+
+# Evaluation/Save strategy
+EVALUATION_STRATEGY = "steps"
+SAVE_STRATEGY = "steps"
 
 # LoRA configuration
 LORA_RANK = 128  # LoRAのランク - reduced for memory efficiency

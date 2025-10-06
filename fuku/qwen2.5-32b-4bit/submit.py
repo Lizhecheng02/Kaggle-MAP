@@ -60,11 +60,13 @@ def main():
         # ベースモデルを読み込む（4bit量子化で読み込み）
         from transformers import BitsAndBytesConfig
 
+        # config.pyの設定に基づいて4bit量子化を構成
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4"
+            bnb_4bit_compute_dtype=getattr(torch, BNB_4BIT_COMPUTE_DTYPE),
+            bnb_4bit_quant_type=BNB_4BIT_QUANT_TYPE,
+            bnb_4bit_use_double_quant=BNB_4BIT_USE_DOUBLE_QUANT,
+            bnb_4bit_quant_storage_dtype=getattr(torch, BNB_4BIT_QUANT_STORAGE_DTYPE)
         )
 
         model = AutoModelForSequenceClassification.from_pretrained(
