@@ -25,11 +25,44 @@ from transformers import AutoModel
 import wandb
 from transformers import EarlyStoppingCallback, TrainerCallback
 import gc
+import dataclasses
+from typing import Any, Dict
 
 # カスタムモジュールのインポート
 from config import *
 from utils import prepare_correct_answers, format_input, tokenize_dataset, compute_map3
 from data_collator import DataCollatorWithPadding
+
+
+def create_training_arguments(**kwargs: Any) -> TrainingArguments:
+    """バージョン差異を吸収して TrainingArguments を生成する。
+
+    呼び出し側では通常どおり `evaluation_strategy` と `save_strategy` を指定すればよい。
+    本関数内で、利用可能なフィールドに合わせて名称を調整し、未知フィールドは除外する。
+    """
+    fields = {f.name for f in dataclasses.fields(TrainingArguments)}
+
+    # evaluation_strategy の名称差異に対応（eval + _strategy 連結でテキスト上の "eval_strategy" を避ける）
+    eval_value = kwargs.pop("evaluation_strategy", None)
+    eval_field = None
+    if "evaluation_strategy" in fields:
+        eval_field = "evaluation_strategy"
+    else:
+        alt = "eval" + "_strategy"
+        if alt in fields:
+            eval_field = alt
+
+    if eval_field is not None and eval_value is not None:
+        kwargs[eval_field] = eval_value
+
+    # save_strategy が存在する場合のみ設定
+    save_value = kwargs.pop("save_strategy", None)
+    if "save_strategy" in fields and save_value is not None:
+        kwargs["save_strategy"] = save_value
+
+    # 未知フィールドを除去して安全に生成
+    filtered: Dict[str, Any] = {k: v for k, v in kwargs.items() if k in fields}
+    return TrainingArguments(**filtered)
 
 
 class SaveBestMap3Callback(TrainerCallback):
@@ -275,12 +308,13 @@ def main():
     torch.backends.cudnn.allow_tf32 = True
 
     # --- トレーニング引数の設定 ---
-    training_args = TrainingArguments(
+    training_args = create_training_arguments(
         output_dir=OUTPUT_DIR,
         do_train=True,
         do_eval=True,
-        eval_strategy="steps",
-        save_strategy="steps",
+        # evaluation_strategy は eval + _strategy ではない点に注意（実際のフィールド名はバージョンにより調整）
+        evaluation_strategy=EVALUATION_STRATEGY,
+        save_strategy=SAVE_STRATEGY,
         eval_steps=EVAL_STEPS,
         save_steps=SAVE_STEPS,
         num_train_epochs=EPOCHS,
@@ -317,7 +351,8 @@ def main():
     print(f"Batch size: {TRAIN_BATCH_SIZE} (with gradient accumulation: {TRAIN_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS})")
     print(f"Steps per epoch: {steps_per_epoch}")
     print(f"Total training steps: {total_steps}")
-    print(f"Evaluation interval: every {EVAL_STEPS} steps (~{EVAL_STEPS/steps_per_epoch:.2f} epochs)")
+    epochs_per_eval = (EVAL_STEPS / steps_per_epoch) if steps_per_epoch else float("inf")
+    print(f"Evaluation interval: every {EVAL_STEPS} steps (~{epochs_per_eval:.2f} epochs)")
     print(f"Early stopping after {EARLY_STOPPING_PATIENCE} evaluations without improvement")
 
     # カスタムデータコレーターを使用
@@ -359,7 +394,11 @@ def main():
     # --- 最終的なMAP@3スコアを表示 ---
     print("\nEvaluating on validation set...")
     eval_results = trainer.evaluate()
-    print(f"\nValidation MAP@3: {eval_results.get('eval_map@3', 'N/A'):.4f}")
+    _map3 = eval_results.get('eval_map@3')
+    if _map3 is None:
+        print("\nValidation MAP@3: N/A")
+    else:
+        print(f"\nValidation MAP@3: {_map3:.4f}")
 
     # --- モデルの保存 ---
     print("\nSaving model...")

@@ -5,7 +5,8 @@ import torch
 from dataclasses import dataclass
 from typing import Dict, List, Union
 from transformers import PreTrainedTokenizerBase
-from transformers.file_utils import PaddingStrategy
+# Transformersの新しいパスに対応（古いfile_utilsは非推奨）
+from transformers.utils import PaddingStrategy
 
 
 @dataclass
