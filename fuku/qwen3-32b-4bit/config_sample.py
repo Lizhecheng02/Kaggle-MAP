@@ -55,7 +55,7 @@ EARLY_STOPPING_THRESHOLD = 0.001  # 改善とみなす最小変化量
 LORA_RANK = 64  # LoRAのランク - reduced for memory efficiency
 LORA_ALPHA = 128  # LoRAのスケーリングパラメータ - reduced proportionally
 LORA_TARGET_MODULES = ["q_proj", "v_proj", "k_proj", "o_proj"]  # 対象モジュール
-LORA_DROPOUT = 0.05  # LoRAのドロップアウト率
+LORA_DROPOUT = 0.1  # LoRAのドロップアウト率
 LORA_BIAS = "none"  # biasの扱い: "none", "all", "lora_only"
 
 # Memory optimization settings
