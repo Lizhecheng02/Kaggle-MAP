@@ -35,7 +35,11 @@ def format_input(row):
         f"Answer: {row['MC_Answer']}\n"
         f"Correct?: {status}\n"
         f"Explanation: {row['StudentExplanation']}\n\n"
-        "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        "<|im_end|>\n<|im_start|>assistant\n"
+        "<think>\n"
+        "Let me analyze this mathematical misconception...\n"
+        "</think>\n\n"
+        "<|im_end|>"
     )
     return prompt
 
