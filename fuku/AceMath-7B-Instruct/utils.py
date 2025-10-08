@@ -4,7 +4,6 @@
 
 import pandas as pd
 import numpy as np
-from transformers import AutoTokenizer
 from datasets import Dataset
 import torch
 
@@ -21,19 +20,22 @@ def prepare_correct_answers(train_data):
 
 
 def format_input(row):
-    """入力データをモデル用プロンプトにフォーマット"""
-    if row["is_correct"]:
-        status = "Yes"
-    else:
-        status = "No"
+    """入力データをモデル用プロンプトにフォーマット（AceMath-7B-Instruct 想定）"""
+    status = "Yes" if row["is_correct"] else "No"
 
-    # 一般的なテキスト分類向けのプレーンテキストプロンプト
+    # ChatML 風の会話テンプレート（AceMath-7B-Instruct想定）
     prompt = (
-        "Task: Classify the student's misconception category based on the question, their chosen answer, correctness, and the explanation.\n\n"
+        "<|im_start|>user"
+        f"[Mathematical Misconception Analysis Task]\n\n"
         f"Question: {row['QuestionText']}\n"
-        f"Chosen Answer: {row['MC_Answer']}\n"
+        f"Answer: {row['MC_Answer']}\n"
         f"Correct?: {status}\n"
-        f"Explanation: {row['StudentExplanation']}\n"
+        f"Explanation: {row['StudentExplanation']}\n\n"
+        "<|im_end|>\n<|im_start|>assistant\n"
+        "<think>\n"
+        "Let me analyze this mathematical misconception...\n"
+        "</think>\n\n"
+        "<|im_end|>"
     )
     return prompt
 

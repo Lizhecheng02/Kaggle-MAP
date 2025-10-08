@@ -13,13 +13,13 @@ MAX_LEN = 250
 OUTPUT_DIR = f"ver_{VER}"
 
 """学習パラメータ"""
-TRAIN_BATCH_SIZE = 4
-EVAL_BATCH_SIZE = 4
-GRADIENT_ACCUMULATION_STEPS = 16
+TRAIN_BATCH_SIZE = 8
+EVAL_BATCH_SIZE = 8
+GRADIENT_ACCUMULATION_STEPS = 8
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 50
-SAVE_STEPS = 200
-EVAL_STEPS = 200
+SAVE_STEPS = 229
+EVAL_STEPS = 229
 
 
 """データパス"""
@@ -57,7 +57,7 @@ LORA_ALPHA = 128
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 LORA_DROPOUT = 0.1
 LORA_BIAS = "none"
-USE_DORA = True
+USE_DORA = False
 
 """メモリ最適化"""
 USE_GRADIENT_CHECKPOINTING = True
@@ -74,3 +74,5 @@ USE_EOS_AS_PAD = True
 # モデル付属のpad_tokenを使いたい場合は明示指定（通常はNoneのまま）
 PAD_TOKEN_STR = None
 PAD_TOKEN_ID = None
+
+# プロンプト設定は utils.py に集約（本ファイルでは定義しません）

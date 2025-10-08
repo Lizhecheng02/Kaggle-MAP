@@ -23,17 +23,9 @@ from tqdm import tqdm
 
 # 設定ファイルをインポート
 from config import *
-from utils import format_input, prepare_correct_answers
+from utils import format_input, prepare_correct_answers, tokenize_dataset
 
-def tokenize_function(examples, tokenizer, max_len):
-    """トークナイズ関数"""
-    return tokenizer(
-        examples['text'],
-        padding=False,
-        truncation=True,
-        max_length=max_len,
-        return_tensors=None
-    )
+# tokenize_dataset(utils側) を用いるためローカル関数は削除
 
 def load_model_and_tokenizer():
     """モデルとトークナイザーをロード"""
@@ -124,14 +116,10 @@ def inference_with_batches(model, tokenizer, dataset, batch_size=16):
     """バッチ処理で推論を実行"""
     # データコレーターの設定
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors='pt')
-    
-    # トークナイズ
-    print("Tokenizing dataset...")
-    tokenized_dataset = dataset.map(
-        lambda x: tokenize_function(x, tokenizer, MAX_LEN),
-        batched=True,
-        remove_columns=dataset.column_names
-    )
+
+    # トークナイズ（チャットテンプレート適用を含む）
+    print("Tokenizing dataset (with chat template)...")
+    tokenized_dataset = tokenize_dataset(dataset, tokenizer, MAX_LEN)
     
     # Trainerを使用した推論（メモリ効率的）
     use_fp16 = torch.cuda.is_available()
