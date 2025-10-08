@@ -11,16 +11,12 @@ from transformers import (
     DataCollatorWithPadding
 )
 from datasets import Dataset
+import time
 import joblib
 import torch
 import gc
-# PEFTのインポートをオプショナルにする
-try:
-    from peft import PeftModel, PeftConfig
-    PEFT_AVAILABLE = True
-except ImportError:
-    PEFT_AVAILABLE = False
-    print("Warning: PEFT not available, will use base model only")
+# PEFT は必須。未インストール時は ImportError がそのまま表示されます。
+from peft import PeftModel, PeftConfig
 
 # カスタムモジュールのインポート
 from config import *
@@ -52,23 +48,23 @@ def main():
 
     print("Loading trained model and tokenizer...")
 
-    if PEFT_AVAILABLE:
-        # LoRAアダプターを使用する場合
-        print(f"Loading fine-tuned LoRA model from: {BEST_MODEL_PATH}")
-        print(f"Loading base model from: {MODEL_NAME}")
+    # LoRAアダプターを使用する場合（PEFT は必須）
+    print(f"Loading fine-tuned LoRA model from: {BEST_MODEL_PATH}")
+    print(f"Loading base model from: {MODEL_NAME}")
 
-        # ベースモデルを読み込む（4bit量子化で読み込み）
-        from transformers import BitsAndBytesConfig
+    # ベースモデルを読み込む（4bit量子化で読み込み）
+    from transformers import BitsAndBytesConfig
 
-        # config.pyの設定に基づいて4bit量子化を構成
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=getattr(torch, BNB_4BIT_COMPUTE_DTYPE),
-            bnb_4bit_quant_type=BNB_4BIT_QUANT_TYPE,
-            bnb_4bit_use_double_quant=BNB_4BIT_USE_DOUBLE_QUANT,
-            bnb_4bit_quant_storage_dtype=getattr(torch, BNB_4BIT_QUANT_STORAGE_DTYPE)
-        )
+    # config.pyの設定に基づいて4bit量子化を構成
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=getattr(torch, BNB_4BIT_COMPUTE_DTYPE),
+        bnb_4bit_quant_type=BNB_4BIT_QUANT_TYPE,
+        bnb_4bit_use_double_quant=BNB_4BIT_USE_DOUBLE_QUANT,
+        bnb_4bit_quant_storage_dtype=getattr(torch, BNB_4BIT_QUANT_STORAGE_DTYPE)
+    )
 
+    try:
         model = AutoModelForSequenceClassification.from_pretrained(
             MODEL_NAME,
             num_labels=n_classes,
@@ -77,20 +73,31 @@ def main():
             device_map="auto",  # 自動的に複数GPUに分散
             low_cpu_mem_usage=True  # CPUメモリ使用量を削減
         )
+    except ValueError as e:
+        # 4bit以外へのフォールバックは行わない方針。
+        # Kaggle等で "dispatched on the CPU or the disk" が発生する場合は
+        # VRAMやバッチ/シーケンス長の見直しを促し、明示的に失敗させる。
+        if "dispatched on the CPU or the disk" in str(e):
+            raise RuntimeError(
+                "4bitロードに失敗しました。8bitフォールバックは無効です。"
+                "VRAMを増やすか、MAX_LEN/EVAL_BATCH_SIZEなどを下げて再実行してください。"
+            ) from e
+        else:
+            raise
 
-        # LoRAアダプターを適用
-        model = PeftModel.from_pretrained(model, BEST_MODEL_PATH)
+    # LoRAアダプターを適用
+    model = PeftModel.from_pretrained(model, BEST_MODEL_PATH)
+    # 注意: 4bit量子化モデル + LoRA を Trainer に渡す際、
+    # LoRA をベースへマージすると「純量子化モデル」扱いになり Trainer 初期化で失敗する。
+    # そのため推論では必ず PEFT ラッパーを保持し、マージしない。
 
-        # 推論モードに設定（メモリ効率化）
-        model.eval()
-        # 4bit量子化モデルは既にGPUに配置されているのでto('cuda')は不要
+    # 推論モードに設定（メモリ効率化）
+    model.eval()
+    # 4bit量子化モデルは既にGPUに配置されているのでto('cuda')は不要
 
-        # トークナイザーはベースモデルから読み込む
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-        print("Successfully loaded LoRA fine-tuned model")
-    else:
-        # PEFTが利用できない場合はエラー
-        raise ImportError("PEFT is required to load the fine-tuned model. Please install peft: pip install peft")
+    # トークナイザーはベースモデルから読み込む
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    print("Successfully loaded LoRA fine-tuned model")
 
     # パディングトークンの設定
     if tokenizer.pad_token is None:
@@ -150,9 +157,21 @@ def main():
             dataloader_num_workers=2,  # データ読み込みの並列化
         )
     )
-    # no_gradコンテキストで推論を実行（メモリ効率化）
-    with torch.no_grad():
+    # inference_mode で推論を実行（さらに軽量な no_grad）
+    with torch.inference_mode():
+        # モデルロード後の1件あたり推論時間を計測（データ全体を一括推論した実効平均）
+        start = time.perf_counter()
         predictions = trainer.predict(ds_test)
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+        except Exception:
+            pass
+        elapsed = time.perf_counter() - start
+        num_samples = len(ds_test)
+        if num_samples > 0:
+            ms_per_sample = (elapsed / num_samples) * 1000.0
+            print(f"Average inference time: {ms_per_sample:.2f} ms/sample (batch={EVAL_BATCH_SIZE}, samples={num_samples})")
 
     print("Creating submission file...")
     # 提出用ファイルの作成
