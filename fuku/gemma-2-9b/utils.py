@@ -34,6 +34,7 @@ def format_input(row):
         f"Answer: {row['MC_Answer']}\n"
         f"Correct? {x}\n"
         f"Explanation: {row['StudentExplanation']}"
+        f"Let me analyze this mathematical misconception...\n"
         # f"<end_of_turn>\n"
         # f"<start_of_turn>model\n"
     )
