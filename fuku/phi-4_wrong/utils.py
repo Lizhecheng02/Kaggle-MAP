@@ -25,6 +25,94 @@ def replace_wrong_fraction(row):
         row["MC_Answer"] = "Wrong_Fraction"
     return row
 
+def wrong_fraction_decoder(
+    submission: pd.DataFrame,
+    test_data: pd.DataFrame | None = None,
+    *,
+    from_label: str | None = None,
+    to_label: str | None = None,
+    question_ids: list[int] | None = None,
+    apply_globally: bool | None = None,
+) -> pd.DataFrame:
+    """
+    予測提出データのラベル表記ゆれを修正するデコーダ。
+
+    - 既知の不一致: "Wrong_Fraction" → "Wrong_fraction"
+    - 既定では特定の `QuestionId`(設定ファイルの `WRONG_FRACTION_FIX_QIDS`) に対してのみ置換する。
+    - `apply_globally=True` の場合は全行に対して置換する。
+
+    Parameters
+    ----------
+    submission : pd.DataFrame
+        列 `row_id`, `Category:Misconception` を持つ提出用データフレーム。
+    test_data : pd.DataFrame | None
+        列 `row_id`, `QuestionId` を含むテストデータ。行ごとの `QuestionId` を特定するために使用。
+    from_label : str | None
+        置換元ラベル。未指定時は設定値 `WRONG_FRACTION_FROM_LABEL` を使用。
+    to_label : str | None
+        置換先ラベル。未指定時は設定値 `WRONG_FRACTION_TO_LABEL` を使用。
+    question_ids : list[int] | None
+        置換対象の `QuestionId` リスト。未指定時は設定値 `WRONG_FRACTION_FIX_QIDS` を使用。
+    apply_globally : bool | None
+        True の場合は全行置換。未指定時は設定値 `WRONG_FRACTION_APPLY_GLOBALLY` を使用。
+
+    Returns
+    -------
+    pd.DataFrame
+        置換後の新しい DataFrame（元の `submission` は変更しない）。
+    """
+
+    # ユーザー要望により設定は関数内でハードコード
+    # 呼び出し時に引数が指定されればそれを優先
+    DEFAULT_FROM = "Wrong_Fraction"
+    DEFAULT_TO = "Wrong_fraction"
+    DEFAULT_QIDS = [33471]
+    DEFAULT_APPLY_GLOBALLY = False
+
+    from_label = from_label or DEFAULT_FROM
+    to_label = to_label or DEFAULT_TO
+    question_ids = question_ids or list(DEFAULT_QIDS)
+    apply_globally = DEFAULT_APPLY_GLOBALLY if apply_globally is None else apply_globally
+
+    if "Category:Misconception" not in submission.columns:
+        raise ValueError("submissionに'Category:Misconception'列が存在しません。")
+    if "row_id" not in submission.columns:
+        raise ValueError("submissionに'row_id'列が存在しません。")
+
+    # 置換ロジック
+    def _replace_line(s: str) -> str:
+        # 3つのラベルが空白区切りで並ぶ前提を保ちつつ部分置換
+        parts = (s or "").split()
+        return " ".join([to_label if p == from_label else p for p in parts])
+
+    out = submission.copy()
+
+    if apply_globally:
+        out["Category:Misconception"] = out["Category:Misconception"].map(_replace_line)
+        return out
+
+    # 行ごとにQuestionIdに基づいて制限
+    if test_data is None:
+        # test_data が無い場合は何もしない（安全側）。
+        return out
+
+    if "row_id" not in test_data.columns or "QuestionId" not in test_data.columns:
+        # 必要列が無ければ何もしない（安全側）。
+        return out
+
+    qid_map = (
+        test_data[["row_id", "QuestionId"]]
+        .drop_duplicates()
+        .set_index("row_id")["QuestionId"]
+    )
+    out["__qid__"] = out["row_id"].map(qid_map)
+    mask = out["__qid__"].isin(set(question_ids))
+    out.loc[mask, "Category:Misconception"] = (
+        out.loc[mask, "Category:Misconception"].map(_replace_line)
+    )
+    out = out.drop(columns=["__qid__"])  # 一時列を削除
+    return out
+
 def format_input(row):
     """入力データをモデル用プロンプトにフォーマット"""
     if row["is_correct"]:

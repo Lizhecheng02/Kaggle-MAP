@@ -14,6 +14,7 @@ from datasets import Dataset
 import joblib
 import torch
 import gc
+from utils import wrong_fraction_decoder
 # PEFTのインポートをオプショナルにする
 try:
     from peft import PeftModel, PeftConfig
@@ -142,6 +143,9 @@ def main():
     print("Creating submission file...")
     # 提出用ファイルの作成
     submission = create_submission(predictions, test, le)
+
+    # 既知の表記ゆれ補正（CSV保存直前に適用） wrong_Fraction → wrong_fraction 33471
+    submission = wrong_fraction_decoder(submission, test)
 
     # ファイルの保存
     submission.to_csv(SUBMISSION_OUTPUT_PATH, index=False)
