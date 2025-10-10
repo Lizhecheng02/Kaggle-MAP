@@ -20,7 +20,7 @@ from peft import PeftModel, PeftConfig
 
 # カスタムモジュールのインポート
 from config import *
-from utils import prepare_correct_answers, format_input, tokenize_dataset, create_submission
+from utils import prepare_correct_answers, format_input, tokenize_dataset, create_submission, wrong_fraction_decoder
 
 
 # Kaggle環境ではカスタムクラスは不要
@@ -176,7 +176,8 @@ def main():
     print("Creating submission file...")
     # 提出用ファイルの作成
     submission = create_submission(predictions, test, le)
-
+    # 既知の表記ゆれ補正（CSV保存直前に適用） wrong_Fraction → wrong_fraction 33471
+    submission = wrong_fraction_decoder(submission, test)
     # ファイルの保存
     submission.to_csv(SUBMISSION_OUTPUT_PATH, index=False)
     print(f"Submission file saved to: {SUBMISSION_OUTPUT_PATH}")
