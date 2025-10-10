@@ -33,10 +33,10 @@ LABEL_ENCODER_PATH = f"{OUTPUT_DIR}/label_encoder.joblib"
 
 # Other settings
 RANDOM_SEED = 42
-VALIDATION_SPLIT = 0.2
+VALIDATION_SPLIT = 0.000000000000001
 
 # GPU settings
-CUDA_VISIBLE_DEVICES = "0"  # GPU device to use. Set to None to use all available GPUs
+CUDA_VISIBLE_DEVICES = "1"  # GPU device to use. Set to None to use all available GPUs
 
 # Submission settings
 SUBMISSION_OUTPUT_PATH = 'submission.csv'
