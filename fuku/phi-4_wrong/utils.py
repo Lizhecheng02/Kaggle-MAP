@@ -20,8 +20,8 @@ def prepare_correct_answers(train_data):
     return correct
 
 def replace_wrong_fraction(row):
-    """Wrong_FractionとWrong_fractionを統一する。"""
-    if row["MC_Answer"] == "Wrong_fraction":
+    """Wrong_FractionとWrong_fractionを統一する。QuestionId 33471の行のみ適用"""
+    if row["QuestionId"] == 33471 and row["MC_Answer"] == "Wrong_fraction":
         row["MC_Answer"] = "Wrong_Fraction"
     return row
 
