@@ -7,15 +7,15 @@ VER = 2
 MODEL_NAME = "/kaggle/input/models/phi-4"
 MODEL_TYPE = "phi"  # Phi-4 model type
 EPOCHS = 3  # Reduce epochs for initial testing
-MAX_LEN = 250  # Phi-4 supports longer context
+MAX_LEN = 300  # Phi-4 supports longer context
 
 # Directory settings
 OUTPUT_DIR = f"ver_{VER}"
 
 # Training parameters
-TRAIN_BATCH_SIZE = 4  # Smaller batch size for Phi-4
-EVAL_BATCH_SIZE = 4  # Eval batch size
-GRADIENT_ACCUMULATION_STEPS = 16  # Increased for effective batch size
+TRAIN_BATCH_SIZE = 2  # Smaller batch size for Phi-4
+EVAL_BATCH_SIZE = 2  # Eval batch size
+GRADIENT_ACCUMULATION_STEPS = 32  # Increased for effective batch size
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 50
 SAVE_STEPS = 229
@@ -24,6 +24,7 @@ EVAL_STEPS = 229
 
 # Data paths
 TRAIN_DATA_PATH = '/kaggle/input/map-charting-student-math-misunderstandings/train.csv'
+# TRAIN_DATA_PATH = "/kaggle/input/map-charting-student-math-misunderstandings/train_ocr_corrected_openai.csv"
 TEST_DATA_PATH = '/kaggle/input/map-charting-student-math-misunderstandings/test.csv'
 
 # Model save paths
@@ -54,7 +55,8 @@ EARLY_STOPPING_THRESHOLD = 0.001  # 改善とみなす最小変化量
 # LoRA configuration for Phi-4
 LORA_RANK = 64  # LoRAのランク - optimized for Phi-4
 LORA_ALPHA = 128  # LoRAのスケーリングパラメータ - 1:1 ratio with rank
-LORA_TARGET_MODULES = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  # Phi-4 target modules
+# LORA_TARGET_MODULES = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]  # Phi-4 target modules
+LORA_TARGET_MODULES = ["qkv_proj","o_proj","gate_up_proj","down_proj"] # Simplified target modules for Phi-4
 LORA_DROPOUT = 0.1  # LoRAのドロップアウト率 - reduced for Phi-4
 LORA_BIAS = "none"  # biasの扱い: "none", "all", "lora_only"
 USE_DORA = False  # DoRA (Weight-Decomposed Low-Rank Adaptation) を使用する場合はTrue

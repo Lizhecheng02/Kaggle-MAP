@@ -15,7 +15,7 @@ OUTPUT_DIR = f"ver_{VER}"
 # Training parameters
 TRAIN_BATCH_SIZE = 4  # Smaller batch size for Phi-4
 EVAL_BATCH_SIZE = 4  # Eval batch size
-GRADIENT_ACCUMULATION_STEPS = 8  # Increased for effective batch size
+GRADIENT_ACCUMULATION_STEPS = 16  # Increased for effective batch size
 LEARNING_RATE = 2e-4
 LOGGING_STEPS = 50
 SAVE_STEPS = 458
