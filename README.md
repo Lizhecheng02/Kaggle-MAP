@@ -18,9 +18,10 @@ During the first period, we mainly focus on following models:
 We use five fold cross validation and LoRA to train each model with 8 different parameters settings:
 
 ``rank=(32 32 32 32 64 64 64 64)``
+
 ``learning rate=(1.75e-4 2.0e-4 2.25e-4 2.5e-4 1.75e-4 2.0e-4 2.25e-4 2.5e-4)``
 
-We constantly set lora_alpha to 32, training epochs to 2 and we mainly use the simplest input prompt shown below:
+We constantly set lora_alpha to 32, training epochs to 2, lr_scheduler to 'linear' and we mainly use the simplest input prompt shown below:
 
 ```
 def format_input(row):
@@ -79,12 +80,12 @@ The CV rankings when training with unified prompts were as follows:
 - scheduler:  cosine-scheduler
 - epoch: 3
 
-| Model                         | CV      | Public | LoRA Rank | Alpha |
-| :---------------------------- | :------ | :----- | :-------- | :---- |
-| Phi-4                         | 0.9483  | 0.948  | 64        | 128   |
-| Phi-4-reasoning-plus          | 0.94802 | 0.948  | 64        | 128   |
-| Qwen3-32B-4bit-quantization   | 0.9483  | 0.946  | 64        | 128   |
-| Qwen2.5-32B-4but-quantization | 0.9485  | 0.946  | 64        | 128   |
+| Model                         | Local CV | Public LB | LoRA Rank | LoRA Alpha |
+| ----------------------------- | :------: | :-------: | :-------: | :--------: |
+| Phi-4                         |  0.9483  |   0.948   |    64     |    128     |
+| Phi-4-reasoning-plus          |  0.9480  |   0.948   |    64     |    128     |
+| Qwen3-32B-4bit-quantization   |  0.9483  |   0.946   |    64     |    128     |
+| Qwen2.5-32B-4but-quantization |  0.9485  |   0.946   |    64     |    128     |
 
 We also tested several smaller models, and the 32B model achieved the same score as the 14B model on LB. However, when used in an ensemble, the 32B model yielded higher LB scores.
 
