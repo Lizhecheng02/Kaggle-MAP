@@ -81,7 +81,7 @@ The CV rankings when training with unified prompts were as follows:
 - epoch: 3
 
 | Model                         | Local CV | Public LB | LoRA Rank | LoRA Alpha |
-| ----------------------------- | :------: | :-------: | :-------: | :--------: |
+| :---------------------------- | :------: | :-------: | :-------: | :--------: |
 | Phi-4                         |  0.9483  |   0.948   |    64     |    128     |
 | Phi-4-reasoning-plus          |  0.9480  |   0.948   |    64     |    128     |
 | Qwen3-32B-4bit-quantization   |  0.9483  |   0.946   |    64     |    128     |
