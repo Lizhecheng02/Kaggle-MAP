@@ -1,4 +1,4 @@
-# This is the 15th Solution for [Kaggle MAP Competition](https://www.kaggle.com/competitions/map-charting-student-math-misunderstandings)
+# This is the [15th Solution](kaggle.com/competitions/map-charting-student-math-misunderstandings/writeups/15th-place-solution-writeup) for [Kaggle MAP Competition](https://www.kaggle.com/competitions/map-charting-student-math-misunderstandings)
 
 First of all, thanks to my team members: @jjinho @ky8ori @masasato1999 @lizhecheng we work together to achieve the 15th rank on the private leaderboard. Even though the shake down made us miss the gold medal, we have a wonderful journey in this great competition.
 
