@@ -1,8 +1,8 @@
-# 15th Place Solution Writeup
+# This is the 15th Solution for [Kaggle MAP Competition](https://www.kaggle.com/competitions/map-charting-student-math-misunderstandings)
 
 First of all, thanks to my team members: @jjinho @ky8ori @masasato1999 @lizhecheng we work together to achieve the 15th rank on the private leaderboard. Even though the shake down made us miss the gold medal, we have a wonderful journey in this great competition.
 
-## lizhecheng and ky8ori
+## lizhecheng and ky8ori part
 
 We use 8 x A100 80GB GPUs for parallel experiments.
 
@@ -47,7 +47,7 @@ Additional training methods we used:
 - Training with advanced prompts such as adding the options into the input or extending the input questions to be more clear, this method improves the CV score, but the LB score decreases. Also because the input is much longer, we need to set the inference length to 300 or even longer, so we drop this method.
 - Training with other different losses: focal loss, bootstrapping loss, labeling smoothing. However, none of them give consistent CV boost on all five folds validation. We tried a 5-fold CV ensemble train with regular CE loss, but replacing some folds where bootstrapping loss gave better CV scores. This approach boosted lb score by 0.001, which could be just noise.
 - Training with soft labels. With embedding models and manual inspections, we grouped student misconceptions that have the same semantic meaning. For each group, we calculate soft labels based on distribution of its ground truth misconception labels. Again, we saw CV improvement on some folds, but not across all folds. This could be due to inadequate semantic grouping.
-- Training with shared labels. See 'JJ Part'.
+- Training with shared labels. See 'JJ part'.
 
 Post-processing method that we tried:
 
@@ -140,7 +140,7 @@ During model training, we dynamically selected labels for loss calculation based
 The model's generalized output was filtered based on QuestionId labels.
 → This proved effective for both cross-validation and label balancing
 
-## JJ Part
+## JJ part
 
 During this competition I had access to 4090 x 2 and towards the end a RTX 6000 Pro Blackwell Workstation Edition for my experiments.
 
@@ -152,5 +152,5 @@ When it came to prompt also started with the simplest prompt, but later switched
 
 While the models were trained on the classification task, over the course of the competition I also changed the way in which I set up the labels. Hypothesis was that removing True_/False_ prefixes would help the model focus on less classes (since that information was already given to us). Additionally later during error analysis, we noticed that the model was having the highest error rates between the Neither/Correct type labels. One observation was that Neither type language was fairly constant throughout all questions, while Correct type language was very question specific. Therefore I created labels in which Neither was shared across all questions (e.g. “Q:Neither:NA”) while the correct labels were questions specific (e.g. “31772:Correct:NA”). This change gave the best CV (0.9496). Other variations on that labeling scheme (e.g. sharing Correct:NA across all questions and making Neither:NA question specific) were also tried, but did not achieve as high CV (0.949 in the inverted label case), but were added to the ensemble in an attempt to obtain increased diversity.
 
-## Finally
+## Conclusion
 During ensemble training, we combined various models and adjusted their weights, achieving a score of 0.952 on LB. What we lacked this time was proper experiment management, cross validation skills with how CV was constructed. We thank everyone who competed with us until the very end in the competition.
